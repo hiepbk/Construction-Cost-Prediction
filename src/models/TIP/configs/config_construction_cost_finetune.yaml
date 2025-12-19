@@ -26,13 +26,14 @@ data_base: /hdd/hiep/CODE/Construction_Cost_Prediction
 checkpoint: null  # Set to: work_dir/runs/multimodal/tip_pretrain_*/checkpoint_best_*.ckpt
 
 # Data paths (absolute paths)
+# Note: For fine-tuning, we need ground truth, so we use train/val splits (NOT test set)
 data_train_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean.csv
-data_val_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/test/test_clean.csv
-composite_dir_trainval: /hdd/hiep/CODE/Construction_Cost_Prediction/data/trainval_composite  # For train/val sets
-composite_dir_test: /hdd/hiep/CODE/Construction_Cost_Prediction/data/test_composite  # For test set
+data_val_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean.csv  # Val split (has ground truth)
+composite_dir_trainval: /hdd/hiep/CODE/Construction_Cost_Prediction/data/trainval_composite  # For train/val sets (both use this)
+composite_dir_test: /hdd/hiep/CODE/Construction_Cost_Prediction/data/test_composite  # For test set (only for final inference, no training)
 field_lengths_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/field_lengths.pt
 train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean_metadata.pkl
-val_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/test/test_clean_metadata.pkl
+val_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean_metadata.pkl
 labels_train_eval_imaging: null  # Not needed for fine-tuning - targets are in CSV file
 labels_val_eval_imaging: null  # Not needed for fine-tuning - targets are in CSV file
 
@@ -74,6 +75,7 @@ val_check_interval: 1.0  # Check validation every epoch
 eval_metric: mae  # Metric to monitor for best checkpoint (mae, rmse, r2)
 limit_train_batches: null  # Use all training batches
 limit_val_batches: null  # Use all validation batches
+limit_test_batches: null  # Use all test batches
 gpus: 1
 num_workers: 4
 pin_memory: true

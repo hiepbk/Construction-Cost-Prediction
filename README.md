@@ -145,9 +145,45 @@ Construction_Cost_Prediction/
 ├── data/
 │   ├── train_dataset_*.zip          # Training dataset
 │   ├── evaluation_dataset_*.zip    # Evaluation dataset
-│   ├── train_tabular.csv           # Training tabular data
-│   ├── trainval_composite/         # Training and validation satellite imagery
-│   └── test_composite/             # Test satellite imagery
+│   ├── trainval_tabular.csv         # Original trainval CSV (before split)
+│   ├── trainval_composite/          # Satellite imagery for train/val sets
+│   └── test_composite/              # Satellite imagery for test set
+│
+├── data/annotation/                 # Preprocessed data (created by preprocessing)
+│   ├── train/
+│   │   ├── train_clean.csv          # Training set (from trainval split, has ground truth)
+│   │   └── train_clean_metadata.pkl # Training metadata
+│   ├── val/
+│   │   ├── val_clean.csv            # Validation set (from trainval split, has ground truth)
+│   │   └── val_clean_metadata.pkl   # Validation metadata
+│   ├── test/
+│   │   ├── test_clean.csv           # Test set (NO ground truth, only for final inference)
+│   │   └── test_clean_metadata.pkl  # Test metadata
+│   └── field_lengths.pt             # Tabular field lengths (for TIP encoder)
+```
+
+### Data Structure Explanation
+
+**Preprocessing Flow:**
+1. **Input:** `trainval_tabular.csv` (contains all training data with ground truth)
+2. **Split:** Preprocessing splits `trainval_tabular.csv` into:
+   - `train_clean.csv` (80% of trainval, has ground truth) → uses `trainval_composite/`
+   - `val_clean.csv` (20% of trainval, has ground truth) → uses `trainval_composite/`
+3. **Test:** `test.csv` (separate file, NO ground truth, only for final submission) → uses `test_composite/`
+
+**Composite Folder Mapping:**
+- **`trainval_composite/`**: Contains satellite TIFF files for **both** train and val sets
+  - Used by: `train_clean.csv` and `val_clean.csv`
+  - Both CSV files reference filenames that exist in this folder
+- **`test_composite/`**: Contains satellite TIFF files for test set only
+  - Used by: `test_clean.csv`
+  - Test CSV references filenames that exist in this folder
+
+**Important Notes:**
+- ✅ **For training/fine-tuning:** Use `train_clean.csv` and `val_clean.csv` (both have ground truth)
+- ✅ **For validation during training:** Use `val_clean.csv` (has ground truth for metrics)
+- ❌ **Do NOT use `test_clean.csv` for training:** It has NO ground truth
+- ✅ **For final inference:** Use `test_clean.csv` with `test_composite/` to generate submission
 ├── src/                             # Source code
 │   ├── data/                       # Data loading utilities
 │   ├── models/                     # Model implementations

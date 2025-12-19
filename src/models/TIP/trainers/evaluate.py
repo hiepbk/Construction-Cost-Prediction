@@ -49,7 +49,7 @@ def load_datasets(hparams):
     )
     val_dataset = ConstructionCostTIPDataset(
       csv_path=hparams.data_val_eval_tabular,
-      composite_dir=hparams.composite_dir_trainval,
+      composite_dir=hparams.composite_dir_trainval,  # Val split uses trainval_composite (same as train)
       field_lengths_tabular=hparams.field_lengths_tabular,
       labels_path=hparams.labels_val_eval_imaging,  # Contains targets
       img_size=grab_arg_from_checkpoint(hparams, 'img_size'),
@@ -147,7 +147,7 @@ def evaluate(hparams, wandb_logger):
   drop = ((len(train_dataset)%hparams.batch_size)==1)
 
   sampler = None
-  if hparams.weights:
+  if getattr(hparams, 'weights', None):
     print('Using weighted random sampler(')
     weights_list = [hparams.weights[int(l)] for l in train_dataset.labels]
     sampler = WeightedRandomSampler(weights=weights_list, num_samples=len(weights_list), replacement=True)
