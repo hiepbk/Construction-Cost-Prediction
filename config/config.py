@@ -9,7 +9,7 @@ from typing import Optional, List
 class DataConfig:
     """Data loading and preprocessing configuration"""
     train_csv: str = 'data/train_tabular.csv'
-    composite_dir: str = 'data/train_composite'
+    composite_dir: str = 'data/trainval_composite'
     image_size: int = 224
     val_split: float = 0.2
     random_seed: int = 42

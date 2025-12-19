@@ -146,8 +146,8 @@ Construction_Cost_Prediction/
 │   ├── train_dataset_*.zip          # Training dataset
 │   ├── evaluation_dataset_*.zip    # Evaluation dataset
 │   ├── train_tabular.csv           # Training tabular data
-│   ├── train_composite/            # Training satellite imagery
-│   └── evaluation_composite/       # Evaluation satellite imagery
+│   ├── trainval_composite/         # Training and validation satellite imagery
+│   └── test_composite/             # Test satellite imagery
 ├── src/                             # Source code
 │   ├── data/                       # Data loading utilities
 │   ├── models/                     # Model implementations
@@ -209,11 +209,25 @@ Before training, you need to preprocess the tabular data. This script:
 - Processes categorical and numerical features
 - Generates metadata for consistent feature mapping
 - **Prints target normalization stats** that you must add to your config file
+- Optionally checks if image files exist on disk
 
+**Basic command:**
 ```bash
 conda activate ccp
 cd /hdd/hiep/CODE/Construction_Cost_Prediction
-python src/data/preprocess_construction_cost.py --annotation_dir data/annotation
+python src/data/preprocess_construction_cost.py \
+    --annotation_dir data/annotation \
+    --composite_dir_trainval data/trainval_composite \
+    --composite_dir_test data/test_composite
+```
+
+**With file existence check:**
+```bash
+python src/data/preprocess_construction_cost.py \
+    --annotation_dir data/annotation \
+    --composite_dir_trainval data/trainval_composite \
+    --composite_dir_test data/test_composite \
+    --check_files
 ```
 
 **Important:** After running preprocessing, the script will print target normalization statistics like:
@@ -235,13 +249,22 @@ target_log_transform: true
 ```bash
 python src/data/preprocess_construction_cost.py \
     --annotation_dir data/annotation \
+    --composite_dir_trainval data/trainval_composite \
+    --composite_dir_test data/test_composite \
     --trainval_csv data/annotation/trainval_tabular.csv \
     --test_csv data/annotation/test/test.csv \
     --categorical_threshold 50 \
     --handle_high_cardinality embedding \
     --imputation_strategy simple \
-    --target_col construction_cost_per_m2_usd
+    --target_col construction_cost_per_m2_usd \
+    --check_files  # Optional: check if image files exist
 ```
+
+**Arguments:**
+- `--annotation_dir`: Path to annotation directory (required)
+- `--composite_dir_trainval`: Directory containing satellite TIFF files for train/val sets (required)
+- `--composite_dir_test`: Directory containing satellite TIFF files for test set (required)
+- `--check_files`: Check if image files actually exist on disk (optional flag)
 
 **Output files:**
 - `data/annotation/train/train_clean.csv` - Processed training data
@@ -315,13 +338,54 @@ python run.py pretrain=True
 
 All pretrained models are automatically downloaded when first used.
 
+### Evaluation
+
+After training, you can evaluate your model on the validation set and generate predictions for the test set:
+
+**Using the evaluation script:**
+```bash
+conda activate ccp
+cd /hdd/hiep/CODE/Construction_Cost_Prediction
+./run_evaluation.sh
+```
+
+**Or run directly:**
+```bash
+cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
+python evaluate_construction_cost.py \
+    --checkpoint work_dir/runs/multimodal/tip_pretrain_*/checkpoint_best_rmsle_*.ckpt \
+    --val_csv /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean.csv \
+    --test_csv /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/test/test_clean.csv \
+    --composite_dir_trainval /hdd/hiep/CODE/Construction_Cost_Prediction/data/trainval_composite \
+    --composite_dir_test /hdd/hiep/CODE/Construction_Cost_Prediction/data/test_composite \
+    --field_lengths /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/field_lengths.pt \
+    --val_metadata /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean_metadata.pkl \
+    --test_metadata /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/test/test_clean_metadata.pkl \
+    --output_dir work_dir/evaluation \
+    --batch_size 32 \
+    --num_workers 4 \
+    --device cuda
+```
+
+**Evaluation outputs:**
+- `val_predictions_{checkpoint_name}_{timestamp}.csv` - Validation predictions with ground truth
+- `submission_{checkpoint_name}_{timestamp}.csv` - Test set predictions for submission
+- Validation metrics (RMSLE, MAE, RMSE, R²) printed to console
+
+**Important:** 
+- `--composite_dir_trainval`: Directory containing satellite images for train/val sets (required)
+- `--composite_dir_test`: Directory containing satellite images for test set (required)
+- Both directories must be specified separately
+
 ### Command Line Arguments
 
 The training script supports command-line arguments to override config defaults:
 
 **Data arguments:**
 - `--train_csv`: Path to training CSV file (default: `data/train_tabular.csv`)
-- `--composite_dir`: Directory containing satellite imagery (default: `data/train_composite`)
+- Note: Composite directories are specified in config files:
+  - `composite_dir_trainval`: For train/val sets (in pretrain config)
+  - `composite_dir_test`: For test set (in finetune config)
 
 **Output arguments:**
 - `--work_dir`: Base directory for all outputs (default: `workdir`)

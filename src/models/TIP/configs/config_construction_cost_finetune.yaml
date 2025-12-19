@@ -25,7 +25,8 @@ checkpoint: null  # Set to: work_dir/runs/multimodal/tip_pretrain_*/checkpoint_b
 # Data paths (absolute paths)
 data_train_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean.csv
 data_val_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/test/test_clean.csv
-composite_dir: /hdd/hiep/CODE/Construction_Cost_Prediction/data/composites
+composite_dir_trainval: /hdd/hiep/CODE/Construction_Cost_Prediction/data/trainval_composite  # For train/val sets
+composite_dir_test: /hdd/hiep/CODE/Construction_Cost_Prediction/data/test_composite  # For test set
 field_lengths_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/field_lengths.pt
 train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean_metadata.pkl
 val_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/test/test_clean_metadata.pkl

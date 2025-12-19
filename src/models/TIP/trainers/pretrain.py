@@ -41,7 +41,7 @@ def load_datasets(hparams):
         # Use our custom Construction Cost dataset
         train_dataset = ConstructionCostTIPDataset(
           csv_path=hparams.data_train_tabular,
-          composite_dir=hparams.composite_dir,
+          composite_dir=hparams.composite_dir_trainval,
           field_lengths_tabular=hparams.field_lengths_tabular,
           labels_path=hparams.labels_train,
           img_size=hparams.img_size,
@@ -60,7 +60,7 @@ def load_datasets(hparams):
         )
         val_dataset = ConstructionCostTIPDataset(
           csv_path=hparams.data_val_tabular,
-          composite_dir=hparams.composite_dir,
+          composite_dir=hparams.composite_dir_trainval,
           field_lengths_tabular=hparams.field_lengths_tabular,
           labels_path=hparams.labels_val,
           img_size=hparams.img_size,

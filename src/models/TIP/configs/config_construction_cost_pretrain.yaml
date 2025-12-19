@@ -21,7 +21,8 @@ data_base: /hdd/hiep/CODE/Construction_Cost_Prediction
 # Data paths (absolute paths)
 data_train_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean.csv
 data_val_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean.csv
-composite_dir: /hdd/hiep/CODE/Construction_Cost_Prediction/data/composites
+composite_dir_trainval: /hdd/hiep/CODE/Construction_Cost_Prediction/data/trainval_composite  # For train and val sets
+composite_dir_test: /hdd/hiep/CODE/Construction_Cost_Prediction/data/test_composite  # For test set
 field_lengths_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/field_lengths.pt
 train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean_metadata.pkl
 val_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean_metadata.pkl
@@ -94,7 +95,7 @@ view: augmented  # View type for contrastive learning
 tr_loss: normal  # Tabular reconstruction loss type
 
 # Image Augmentation
-img_size: 224
+img_size: 512  # Increased to match SatlasPretrain training size (was 224)
 augmentation_rate: 0.95
 live_loading: false
 augmentation_speedup: true
@@ -108,8 +109,8 @@ use_viirs: true
 # Logging
 wandb_project: construction_cost_tip
 wandb_name: tip_pretrain
-use_wandb: true  # Enable WandB online logging
-offline: false  # Set to false for online WandB logging
+use_wandb: fasle  # Enable WandB online logging
+offline: true  # Set to false for online WandB logging
 wandb_entity: null  # Set to your WandB entity/username if needed
 wandb_id: null  # For resuming training
 exp_name: tip_pretrain

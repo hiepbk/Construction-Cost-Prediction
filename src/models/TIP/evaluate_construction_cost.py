@@ -437,8 +437,10 @@ def main():
                         help='Path to validation CSV (with targets)')
     parser.add_argument('--test_csv', type=str, required=True,
                         help='Path to test CSV (without targets)')
-    parser.add_argument('--composite_dir', type=str, required=True,
-                        help='Directory containing satellite TIFF files')
+    parser.add_argument('--composite_dir_trainval', type=str, required=True,
+                        help='Directory containing satellite TIFF files for train/val sets')
+    parser.add_argument('--composite_dir_test', type=str, required=True,
+                        help='Directory containing satellite TIFF files for test set')
     parser.add_argument('--field_lengths', type=str, required=True,
                         help='Path to field_lengths.pt file')
     parser.add_argument('--val_metadata', type=str, required=True,
@@ -480,9 +482,10 @@ def main():
     print("\n" + "="*60)
     print("LOADING VALIDATION DATASET")
     print("="*60)
+    print(f"Using composite directory: {args.composite_dir_trainval}")
     val_dataset = ConstructionCostTIPDataset(
         csv_path=args.val_csv,
-        composite_dir=args.composite_dir,
+        composite_dir=args.composite_dir_trainval,
         field_lengths_tabular=args.field_lengths,
         labels_path=None,  # Not needed for evaluation
         img_size=224,
@@ -529,9 +532,10 @@ def main():
     print("\n" + "="*60)
     print("LOADING TEST DATASET")
     print("="*60)
+    print(f"Using composite directory: {args.composite_dir_test}")
     test_dataset = ConstructionCostTIPDataset(
         csv_path=args.test_csv,
-        composite_dir=args.composite_dir,
+        composite_dir=args.composite_dir_test,
         field_lengths_tabular=args.field_lengths,
         labels_path=None,  # Not needed for inference
         img_size=224,
@@ -560,6 +564,7 @@ def main():
         test_loader=test_loader,
         device=device,
         output_path=submission_path,
+        checkpoint_path=args.checkpoint,
         data_ids=None  # Will extract from dataset
     )
     

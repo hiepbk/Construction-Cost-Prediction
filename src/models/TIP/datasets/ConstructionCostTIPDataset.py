@@ -9,6 +9,7 @@ from typing import List, Tuple, Optional
 import random
 import copy
 import os
+from pathlib import Path
 
 import torch
 from torch.utils.data import Dataset
@@ -111,6 +112,26 @@ class ConstructionCostTIPDataset(Dataset):
         self.target_log_transform = target_log_transform
         self.metadata_path = metadata_path
         
+        # Validate composite_dir exists and contains files (critical check to avoid silent failures)
+        if (self.use_sentinel2 or self.use_viirs) and composite_dir:
+            if not os.path.exists(composite_dir):
+                raise FileNotFoundError(
+                    f"❌ CRITICAL ERROR: Composite directory does not exist: {composite_dir}\n"
+                    f"   Please check your config file and ensure the path is correct.\n"
+                    f"   Expected paths: data/trainval_composite (for train/val) or data/test_composite (for test)"
+                )
+            if not os.path.isdir(composite_dir):
+                raise NotADirectoryError(
+                    f"❌ CRITICAL ERROR: Composite path is not a directory: {composite_dir}"
+                )
+            
+            # Check if directory contains any .tif files
+            tif_files = list(Path(composite_dir).glob("*.tif"))
+            if len(tif_files) == 0:
+                print(f"⚠️  WARNING: Composite directory contains no .tif files: {composite_dir}")
+                print(f"   This might indicate the wrong directory was specified.")
+                print(f"   Expected paths: data/trainval_composite (for train/val) or data/test_composite (for test)")
+        
         # Load CSV
         self.df = pd.read_csv(csv_path)
         
@@ -134,6 +155,7 @@ class ConstructionCostTIPDataset(Dataset):
         
         # Image augmentation
         self.augmentation_rate = augmentation_rate if is_train else 0.0
+        self.satellite_augmentations = []  # Initialize, will be set in _setup_augmentations
         self._setup_augmentations()
         
         # Labels (for pretraining - can be indices for contrastive learning)
@@ -303,9 +325,10 @@ class ConstructionCostTIPDataset(Dataset):
         self.marginal_distributions = np.transpose(data)
     
     def _setup_augmentations(self):
-        """Setup image augmentation transforms"""
+        """Setup image augmentation transforms with Satlas-specific augmentations"""
         if self.augmentation_speedup:
             # Use albumentations for faster augmentation
+            # Default transform: just resize and convert to tensor (no augmentation)
             self.default_transform = A.Compose([
                 A.Resize(height=self.img_size, width=self.img_size),
                 A.Lambda(name='convert2tensor', image=convert_satellite_to_tensor)
@@ -313,17 +336,19 @@ class ConstructionCostTIPDataset(Dataset):
             
             # Augmentation transform (for training)
             if self.is_train:
-                # Use our satellite-specific augmentations
-                aug_list = build_satellite_augmentations(
+                # Build Satlas-specific augmentations (spectral, noise, etc.)
+                # These work on tensors, so we'll apply them after albumentations
+                self.satellite_augmentations = build_satellite_augmentations(
                     is_train=True,
-                    use_geometric=True,
-                    use_spectral=True,
-                    use_noise=True,
-                    use_crop=False
+                    use_geometric=True,  # RandomRotation90
+                    use_spectral=True,   # RandomSpectralJitter, RandomBrightness
+                    use_noise=True,      # RandomGaussianNoise
+                    use_crop=False       # Don't use crop (too aggressive)
                 )
-                # Convert to albumentations format
-                # For now, use simple augmentations
-                self.transform = A.Compose([
+                
+                # Albumentations for geometric transforms (resize + flips/rotations)
+                # These work on numpy arrays before converting to tensor
+                self.albumentations_transform = A.Compose([
                     A.Resize(height=self.img_size, width=self.img_size),
                     A.HorizontalFlip(p=0.5),
                     A.VerticalFlip(p=0.5),
@@ -331,14 +356,27 @@ class ConstructionCostTIPDataset(Dataset):
                     A.Lambda(name='convert2tensor', image=convert_satellite_to_tensor)
                 ])
             else:
-                self.transform = self.default_transform
+                # No augmentation for validation/test
+                self.satellite_augmentations = []
+                self.albumentations_transform = self.default_transform
         else:
-            # Use torchvision transforms
+            # Use torchvision transforms (fallback)
             self.default_transform = transforms.Compose([
                 transforms.Resize(size=(self.img_size, self.img_size)),
                 transforms.Lambda(convert_to_float)
             ])
-            self.transform = self.default_transform
+            if self.is_train:
+                self.satellite_augmentations = build_satellite_augmentations(
+                    is_train=True,
+                    use_geometric=True,
+                    use_spectral=True,
+                    use_noise=True,
+                    use_crop=False
+                )
+                self.albumentations_transform = self.default_transform
+            else:
+                self.satellite_augmentations = []
+                self.albumentations_transform = self.default_transform
     
     def _load_satellite_image(self, idx: int) -> torch.Tensor:
         """
@@ -350,30 +388,52 @@ class ConstructionCostTIPDataset(Dataset):
         # Load Sentinel-2 (12 bands)
         if self.use_sentinel2 and pd.notna(row.get('sentinel2_tiff_file_name')):
             sentinel2_path = os.path.join(self.composite_dir, row['sentinel2_tiff_file_name'])
-            try:
-                with rasterio.open(sentinel2_path) as src:
-                    sentinel2 = src.read()  # (12, H, W)
-                    # Normalize to [0, 1]
-                    sentinel2 = np.clip(sentinel2 / 10000.0, 0, 1).astype('float32')
-            except Exception as e:
-                sentinel2 = np.zeros((12, self.img_size, self.img_size), dtype='float32')
-        else:
-            sentinel2 = np.zeros((12, self.img_size, self.img_size), dtype='float32')
+            if not os.path.exists(sentinel2_path):
+                raise FileNotFoundError(
+                    f"❌ ERROR: Sentinel-2 file not found: {sentinel2_path}\n"
+                    f"   Row index: {idx}, data_id: {row.get('data_id', 'unknown')}\n"
+                    f"   Check if composite_dir is correct: {self.composite_dir}"
+                )
+            with rasterio.open(sentinel2_path) as src:
+                sentinel2 = src.read()  # (12, H, W)
+                # check if any element is nan,m if nan, print the index the warning
+                if np.isnan(sentinel2).any():
+                    print(f"❌ WARNING: Sentinel-2 file contains nan values: {sentinel2_path}")
+                    print(f"   Row index: {idx}, data_id: {row.get('data_id', 'unknown')}")
+                    print(f"   Check if the file is corrupted: {sentinel2_path}")
+                    print(f"   Check if the file is corrupted: {sentinel2_path}")
+                
+                # Normalize to [0, 1]
+                sentinel2 = np.clip(sentinel2 / 10000.0, 0, 1).astype('float32')
+        # else:
+        #     sentinel2 = np.zeros((12, self.img_size, self.img_size), dtype='float32')
         
         # Load VIIRS (1 band, convert to 3 channels)
         if self.use_viirs and pd.notna(row.get('viirs_tiff_file_name')):
             viirs_path = os.path.join(self.composite_dir, row['viirs_tiff_file_name'])
-            try:
-                with rasterio.open(viirs_path) as src:
-                    viirs = src.read(1)  # (H, W) single band
-                    # Normalize
-                    viirs = np.clip(viirs / 100.0, 0, 1).astype('float32')
-                    # Convert to 3 channels (repeat)
-                    viirs = np.stack([viirs, viirs, viirs], axis=0)  # (3, H, W)
-            except Exception as e:
-                viirs = np.zeros((3, self.img_size, self.img_size), dtype='float32')
-        else:
-            viirs = np.zeros((3, self.img_size, self.img_size), dtype='float32')
+            if not os.path.exists(viirs_path):
+                raise FileNotFoundError(
+                    f"❌ ERROR: VIIRS file not found: {viirs_path}\n"
+                    f"   Row index: {idx}, data_id: {row.get('data_id', 'unknown')}\n"
+                    f"   Check if composite_dir is correct: {self.composite_dir}"
+                )
+            with rasterio.open(viirs_path) as src:
+                viirs = src.read(1)  # (H, W) single band
+                
+                # check if any element is nan,m if nan, print the index the warning
+                if np.isnan(viirs).any():
+                    print(f"❌ WARNING: VIIRS file contains nan values: {viirs_path}")
+                    print(f"   Row index: {idx}, data_id: {row.get('data_id', 'unknown')}")
+                    print(f"   Check if the file is corrupted: {viirs_path}")
+                    print(f"   Check if the file is corrupted: {viirs_path}")
+                
+                
+                # Normalize
+                viirs = np.clip(viirs / 100.0, 0, 1).astype('float32')
+                # Convert to 3 channels (repeat)
+                viirs = np.stack([viirs, viirs, viirs], axis=0)  # (3, H, W)
+        # else:
+        #     viirs = np.zeros((3, self.img_size, self.img_size), dtype='float32')
         
         # Combine: (15, H, W)
         combined = np.concatenate([sentinel2, viirs], axis=0)
@@ -455,26 +515,44 @@ class ConstructionCostTIPDataset(Dataset):
     def generate_imaging_views(self, index: int) -> Tuple[List[torch.Tensor], torch.Tensor]:
         """
         Generate two views of satellite image for contrastive learning.
+        Uses Satlas-specific augmentations (spectral, noise) combined with geometric transforms.
         Returns: (augmented_views, unaugmented_image)
         """
-        im = self._load_satellite_image(index)  # (15, H, W)
+        im = self._load_satellite_image(index)  # (15, H, W) - already resized to img_size
+        
+        print(f"im: {im.shape}")
+        
+        #print random 1 element of each channel of 15 channels
+        for i in range(15):
+            print(f"im[{i}]: {im[i].shape}")
+            print(f"im[{i}]: {im[i][random.randint(0, im[i].shape[0]-1)][random.randint(0, im[i].shape[1]-1)]}")
         
         # Convert to numpy for albumentations (expects H, W, C)
         im_np = im.permute(1, 2, 0).numpy()  # (H, W, 15)
         
         # First view: always augmented (if training)
         if self.is_train:
-            ims = [self.transform(image=im_np)['image']]  # (15, H, W)
+            # Apply albumentations (geometric: resize, flips, rotations)
+            im_tensor = self.albumentations_transform(image=im_np)['image']  # (15, H, W) tensor
+            # Apply Satlas-specific augmentations (spectral, noise) on tensor
+            if self.satellite_augmentations:
+                im_tensor = apply_augmentations(im_tensor, self.satellite_augmentations)
+            ims = [im_tensor]
         else:
             ims = [self.default_transform(image=im_np)['image']]
         
         # Second view: augmented with probability augmentation_rate
         if random.random() < self.augmentation_rate and self.is_train:
-            ims.append(self.transform(image=im_np)['image'])
+            # Apply albumentations (geometric: resize, flips, rotations)
+            im_tensor = self.albumentations_transform(image=im_np)['image']  # (15, H, W) tensor
+            # Apply Satlas-specific augmentations (spectral, noise) on tensor
+            if self.satellite_augmentations:
+                im_tensor = apply_augmentations(im_tensor, self.satellite_augmentations)
+            ims.append(im_tensor)
         else:
             ims.append(self.default_transform(image=im_np)['image'])
         
-        # Unaugmented image (for validation)
+        # Unaugmented image (for validation) - no augmentation
         orig_im = self.default_transform(image=im_np)['image']
         
         return ims, orig_im
