@@ -1,0 +1,405 @@
+{
+  "numerical_cols": [
+    "deflated_gdp_usd",
+    "us_cpi",
+    "straight_distance_to_capital_km"
+  ],
+  "categorical_cols": [
+    "geolocation_name",
+    "quarter_label",
+    "country",
+    "year",
+    "developed_country",
+    "landlocked",
+    "region_economic_classification",
+    "access_to_airport",
+    "access_to_port",
+    "access_to_highway",
+    "access_to_railway",
+    "seismic_hazard_zone",
+    "flood_risk_class",
+    "tropical_cyclone_wind_risk",
+    "tornadoes_wind_risk",
+    "koppen_climate_zone"
+  ],
+  "numerical_stats": {
+    "deflated_gdp_usd": {
+      "column": "deflated_gdp_usd",
+      "dtype": "float64",
+      "count": 1024,
+      "missing": 0,
+      "min": 291244296180.30774,
+      "max": 4247588558872.2593,
+      "mean": 2370260062297.7036,
+      "median": 3880440088794.578,
+      "std": 1854773352940.899,
+      "q25": 299682074191.28937,
+      "q75": 4069008481605.98,
+      "outliers_3std": 0,
+      "range": 3956344262691.9517,
+      "has_extreme_values": true
+    },
+    "us_cpi": {
+      "column": "us_cpi",
+      "dtype": "float64",
+      "count": 1024,
+      "missing": 0,
+      "min": 115.9781187205398,
+      "max": 144.7279859179582,
+      "mean": 125.20001373527418,
+      "median": 120.6838014481023,
+      "std": 9.335148320906779,
+      "q25": 117.7956988014519,
+      "q75": 130.2983261906564,
+      "outliers_3std": 0,
+      "range": 28.749867197418396,
+      "has_extreme_values": false
+    },
+    "straight_distance_to_capital_km": {
+      "column": "straight_distance_to_capital_km",
+      "dtype": "float64",
+      "count": 1024,
+      "missing": 0,
+      "min": 0.0,
+      "max": 1550.0,
+      "mean": 468.28759765625,
+      "median": 400.0,
+      "std": 324.3511766273715,
+      "q25": 250.0,
+      "q75": 690.0,
+      "outliers_3std": 13,
+      "range": 1550.0,
+      "has_extreme_values": false
+    }
+  },
+  "categorical_stats": {
+    "geolocation_name": {
+      "column": "geolocation_name",
+      "dtype": "object",
+      "n_unique": 125,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 125,
+      "top_values": {
+        "18000 Fukui": 19,
+        "13000 Tokyo": 18,
+        "16000 Toyama": 17,
+        "25000 Shiga": 17,
+        "42000 Nagasaki": 17,
+        "14000 Kanagawa": 16,
+        "26000 Kyoto": 15,
+        "09000 Tochigi": 14,
+        "08000 Ibaraki": 14,
+        "06000 Yamagata": 14
+      },
+      "value_distribution": {
+        "most_common": 19,
+        "most_common_pct": 1.85546875
+      }
+    },
+    "quarter_label": {
+      "column": "quarter_label",
+      "dtype": "object",
+      "n_unique": 24,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 24,
+      "top_values": {
+        "2021-Q3": 72,
+        "2019-Q3": 70,
+        "2020-Q3": 70,
+        "2020-Q2": 69,
+        "2020-Q1": 65,
+        "2021-Q2": 62,
+        "2019-Q2": 62,
+        "2019-Q1": 62,
+        "2019-Q4": 56,
+        "2020-Q4": 56
+      },
+      "value_distribution": {
+        "most_common": 72,
+        "most_common_pct": 7.03125
+      }
+    },
+    "country": {
+      "column": "country",
+      "dtype": "object",
+      "n_unique": 2,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 2,
+      "top_values": {
+        "Japan": 567,
+        "Philippines": 457
+      },
+      "value_distribution": {
+        "most_common": 567,
+        "most_common_pct": 55.37109375
+      }
+    },
+    "year": {
+      "column": "year",
+      "dtype": "int64",
+      "n_unique": 6,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 6,
+      "top_values": {
+        "2020": 260,
+        "2019": 250,
+        "2021": 243,
+        "2024": 98,
+        "2022": 88,
+        "2023": 85
+      },
+      "value_distribution": {
+        "most_common": 260,
+        "most_common_pct": 25.390625
+      }
+    },
+    "developed_country": {
+      "column": "developed_country",
+      "dtype": "object",
+      "n_unique": 2,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 2,
+      "top_values": {
+        "Yes": 567,
+        "No": 457
+      },
+      "value_distribution": {
+        "most_common": 567,
+        "most_common_pct": 55.37109375
+      }
+    },
+    "landlocked": {
+      "column": "landlocked",
+      "dtype": "object",
+      "n_unique": 2,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 2,
+      "top_values": {
+        "No": 794,
+        "Yes": 230
+      },
+      "value_distribution": {
+        "most_common": 794,
+        "most_common_pct": 77.5390625
+      }
+    },
+    "region_economic_classification": {
+      "column": "region_economic_classification",
+      "dtype": "object",
+      "n_unique": 4,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 4,
+      "top_values": {
+        "High income": 567,
+        "Lower-middle income": 441,
+        "Low income": 12,
+        "Upper-middle income": 4
+      },
+      "value_distribution": {
+        "most_common": 567,
+        "most_common_pct": 55.37109375
+      }
+    },
+    "access_to_airport": {
+      "column": "access_to_airport",
+      "dtype": "object",
+      "n_unique": 2,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 2,
+      "top_values": {
+        "Yes": 698,
+        "No": 326
+      },
+      "value_distribution": {
+        "most_common": 698,
+        "most_common_pct": 68.1640625
+      }
+    },
+    "access_to_port": {
+      "column": "access_to_port",
+      "dtype": "object",
+      "n_unique": 2,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 2,
+      "top_values": {
+        "Yes": 772,
+        "No": 252
+      },
+      "value_distribution": {
+        "most_common": 772,
+        "most_common_pct": 75.390625
+      }
+    },
+    "access_to_highway": {
+      "column": "access_to_highway",
+      "dtype": "object",
+      "n_unique": 2,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 2,
+      "top_values": {
+        "Yes": 1022,
+        "No": 2
+      },
+      "value_distribution": {
+        "most_common": 1022,
+        "most_common_pct": 99.8046875
+      }
+    },
+    "access_to_railway": {
+      "column": "access_to_railway",
+      "dtype": "object",
+      "n_unique": 2,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 2,
+      "top_values": {
+        "Yes": 590,
+        "No": 434
+      },
+      "value_distribution": {
+        "most_common": 590,
+        "most_common_pct": 57.6171875
+      }
+    },
+    "seismic_hazard_zone": {
+      "column": "seismic_hazard_zone",
+      "dtype": "object",
+      "n_unique": 3,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 3,
+      "top_values": {
+        "Moderate": 706,
+        "High": 313,
+        "Low": 5
+      },
+      "value_distribution": {
+        "most_common": 706,
+        "most_common_pct": 68.9453125
+      }
+    },
+    "flood_risk_class": {
+      "column": "flood_risk_class",
+      "dtype": "object",
+      "n_unique": 2,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 2,
+      "top_values": {
+        "Yes": 875,
+        "No": 149
+      },
+      "value_distribution": {
+        "most_common": 875,
+        "most_common_pct": 85.44921875
+      }
+    },
+    "tropical_cyclone_wind_risk": {
+      "column": "tropical_cyclone_wind_risk",
+      "dtype": "object",
+      "n_unique": 4,
+      "n_samples": 1024,
+      "missing": 4,
+      "cardinality": 4,
+      "top_values": {
+        "Moderate": 442,
+        "High": 353,
+        "Low": 204,
+        "Very High": 21
+      },
+      "value_distribution": {
+        "most_common": 442,
+        "most_common_pct": 43.1640625
+      }
+    },
+    "tornadoes_wind_risk": {
+      "column": "tornadoes_wind_risk",
+      "dtype": "object",
+      "n_unique": 2,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 2,
+      "top_values": {
+        "Very Low": 535,
+        "Low": 489
+      },
+      "value_distribution": {
+        "most_common": 535,
+        "most_common_pct": 52.24609375
+      }
+    },
+    "koppen_climate_zone": {
+      "column": "koppen_climate_zone",
+      "dtype": "object",
+      "n_unique": 7,
+      "n_samples": 1024,
+      "missing": 0,
+      "cardinality": 7,
+      "top_values": {
+        "Cfa": 505,
+        "Am": 244,
+        "Af": 178,
+        "Dfa": 59,
+        "Cwb": 21,
+        "Aw": 10,
+        "Dfb": 7
+      },
+      "value_distribution": {
+        "most_common": 505,
+        "most_common_pct": 49.31640625
+      }
+    }
+  },
+  "missing_values": {
+    "total": 4,
+    "features_with_missing": 1,
+    "per_feature": {
+      "geolocation_name": 0,
+      "quarter_label": 0,
+      "country": 0,
+      "year": 0,
+      "deflated_gdp_usd": 0,
+      "us_cpi": 0,
+      "developed_country": 0,
+      "landlocked": 0,
+      "region_economic_classification": 0,
+      "access_to_airport": 0,
+      "access_to_port": 0,
+      "access_to_highway": 0,
+      "access_to_railway": 0,
+      "straight_distance_to_capital_km": 0,
+      "seismic_hazard_zone": 0,
+      "flood_risk_class": 0,
+      "tropical_cyclone_wind_risk": 4,
+      "tornadoes_wind_risk": 0,
+      "koppen_climate_zone": 0
+    }
+  },
+  "normalization_recommendations": [
+    {
+      "column": "deflated_gdp_usd",
+      "strategy": "z_score",
+      "reason": "Extreme values detected - z-score normalization required"
+    },
+    {
+      "column": "us_cpi",
+      "strategy": "robust",
+      "reason": "Skewed distribution - robust scaling recommended"
+    },
+    {
+      "column": "straight_distance_to_capital_km",
+      "strategy": "z_score",
+      "reason": "Normal distribution - z-score recommended"
+    }
+  ]
+}
