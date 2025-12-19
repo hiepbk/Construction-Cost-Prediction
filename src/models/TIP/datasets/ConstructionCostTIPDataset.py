@@ -44,6 +44,7 @@ def convert_satellite_to_tensor(x, **kwargs):
     # Ensure shape is (C, H, W)
     if x.dim() == 4:
         x = x.squeeze(0)
+    x = x.permute(2,0,1)  # (H, W, C) -> (C, H, W)
     return x
 
 
@@ -400,6 +401,13 @@ class ConstructionCostTIPDataset(Dataset):
                 sentinel2 = np.nan_to_num(sentinel2, nan=0.0)
                 # Normalize to [0, 1]
                 sentinel2 = np.clip(sentinel2 / 10000.0, 0, 1).astype('float32')
+                
+                # # check if any nan values
+                # if np.isnan(sentinel2).any():
+                #     print(f"❌ ERROR: Sentinel-2 contains nan values: {sentinel2_path}")
+                #     print(f"   Row index: {idx}, data_id: {row.get('data_id', 'unknown')}")
+                #     print(f"   Check if composite_dir is correct: {self.composite_dir}")
+                #     raise ValueError(f"Sentinel-2 contains nan values: {sentinel2_path}")
         # else:
         #     sentinel2 = np.zeros((12, self.img_size, self.img_size), dtype='float32')
         
@@ -422,6 +430,13 @@ class ConstructionCostTIPDataset(Dataset):
                 viirs = np.clip(viirs / 473.52, 0, 1).astype('float32')
                 # Convert to 3 channels (repeat)
                 viirs = np.stack([viirs, viirs, viirs], axis=0)  # (3, H, W)
+                
+                # check if any nan values
+                # if np.isnan(viirs).any():
+                #     print(f"❌ ERROR: VIIRS contains nan values: {viirs_path}")
+                #     print(f"   Row index: {idx}, data_id: {row.get('data_id', 'unknown')}")
+                #     print(f"   Check if composite_dir is correct: {self.composite_dir}")
+                #     raise ValueError(f"VIIRS contains nan values: {viirs_path}")
         # else:
         #     viirs = np.zeros((3, self.img_size, self.img_size), dtype='float32')
         
@@ -510,7 +525,7 @@ class ConstructionCostTIPDataset(Dataset):
         """
         im = self._load_satellite_image(index)  # (15, H, W) - already resized to img_size
         
-        print(f"im shape after loading: {im.shape}")
+        # print(f"im shape after loading: {im.shape}")
 
         # Convert to numpy for albumentations (expects H, W, C)
         im_np = im.permute(1, 2, 0).numpy()  # (H, W, 15)
