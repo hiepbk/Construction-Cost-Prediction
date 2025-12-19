@@ -254,58 +254,64 @@ python src/data/preprocess_construction_cost.py \
 
 ### Training
 
-The training script uses a configuration system. All parameters are defined in `src/models/TIP/configs/config_construction_cost_pretrain.yaml` and can be overridden via command-line arguments.
+The training script uses Hydra configuration system. All parameters are defined in `src/models/TIP/configs/config_construction_cost_pretrain.yaml` and can be overridden via command-line arguments.
+
+**Important:** Make sure you have:
+1. ✅ Run preprocessing and added `target_mean` and `target_std` to the config file
+2. ✅ Set up WandB (if using) with your project and entity names
 
 #### Basic Training (Uses Default Config)
 
 ```bash
 conda activate ccp
-python train.py
+cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
+python run.py
 ```
 
 #### Training with Custom Parameters
 
+You can override any config parameter via command-line:
+
 ```bash
 conda activate ccp
-python train.py \
-    --train_csv data/train_tabular.csv \
-    --composite_dir data/train_composite \
-    --work_dir workdir \
-    --batch_size 8 \
-    --epochs 100 \
-    --device cuda
-```
-
-#### Training with Custom Config File
-
-Create a JSON config file and use it:
-
-```bash
-python train.py --config my_config.json
+cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
+python run.py \
+    batch_size=32 \
+    max_epochs=100 \
+    lr=3e-4 \
+    pretrain=True
 ```
 
 #### Recommended Training Command
 
 ```bash
 conda activate ccp
-python train.py \
-    --train_csv data/train_tabular.csv \
-    --composite_dir data/train_composite \
-    --work_dir workdir \
-    --batch_size 8 \
-    --epochs 100
+cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
+python run.py pretrain=True
 ```
 
-**Note:** All training outputs (checkpoints, logs, config, history) will be saved in a timestamped folder:
-- `workdir/YYYYMMDD_HHMMSS/checkpoints/` - Model checkpoints
-- `workdir/YYYYMMDD_HHMMSS/logs/` - Training log file
-- `workdir/YYYYMMDD_HHMMSS/config.json` - Training configuration
-- `workdir/YYYYMMDD_HHMMSS/history.json` - Training history
+**Training Outputs:**
+- Checkpoints saved to: `work_dir/runs/multimodal/{wandb_run_name}/`
+  - `checkpoint_best_rmsle_*.ckpt` - Best checkpoint based on validation RMSLE
+  - `checkpoint_last_epoch_*.ckpt` - Last epoch checkpoint
+- WandB logs: Training metrics, validation metrics, and prediction logs
+
+**Key Config Parameters:**
+- `batch_size`: Batch size (default: 32)
+- `max_epochs`: Number of training epochs (default: 100)
+- `lr`: Learning rate (default: 3e-4)
+- `target_mean`: Target normalization mean (from preprocessing)
+- `target_std`: Target normalization std (from preprocessing)
+- `online_mlp`: Enable online regression evaluation (default: true)
+- `use_wandb`: Enable WandB logging (default: true)
+- `wandb_project`: WandB project name
+- `wandb_entity`: WandB entity/username
 
 **Note:** The model uses:
+- **TIP (Tabular-Image Pre-training)** for self-supervised pretraining
 - **SatlasPretrain** for satellite imagery (auto-downloads pretrained weights)
-- **FT-Transformer** for tabular data
-- **Cross-Modal Attention Fusion** for combining modalities
+- **TabularTransformerEncoder** for tabular data
+- **MultimodalTransformerEncoder** for cross-modal fusion
 
 All pretrained models are automatically downloaded when first used.
 

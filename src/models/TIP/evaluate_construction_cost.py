@@ -17,6 +17,7 @@ import pandas as pd
 from torch.utils.data import DataLoader
 from pathlib import Path
 from typing import Tuple, Optional
+from datetime import datetime
 import torchmetrics
 
 # Add src/models/TIP to path for relative imports (like other TIP scripts)
@@ -62,6 +63,50 @@ class TIPRegressionModel(nn.Module):
         
         self.backbone = TIPBackbone(hparams)
         
+        # Try to load online regression head weights from checkpoint callback state
+        # The online regression head was trained during pretraining and saved in callback state
+        # This is critical - without loading these weights, we use a random regression head!
+        online_regression_loaded = False
+        if 'callbacks' in checkpoint:
+            # Find the SSLOnlineEvaluatorRegression callback state
+            # PyTorch Lightning saves callbacks with keys like: "SSLOnlineEvaluatorRegression{hash}"
+            for key in checkpoint['callbacks'].keys():
+                if 'SSLOnlineEvaluatorRegression' in key or 'ssl_online_regression' in key.lower():
+                    callback_state = checkpoint['callbacks'][key]
+                    if 'state_dict' in callback_state:
+                        try:
+                            # The online regression head has a different architecture than TIPBackbone's classifier
+                            # We need to create a matching regression head and load the weights
+                            from utils.ssl_online_regression import RegressionMLP
+                            z_dim = hparams.multimodal_embedding_dim
+                            hidden_dim = getattr(hparams, 'embedding_dim', z_dim)
+                            
+                            # Create the same architecture as the online evaluator
+                            online_regression_head = RegressionMLP(
+                                n_input=z_dim,
+                                n_hidden=hidden_dim,
+                                p=0.2  # Default dropout
+                            )
+                            
+                            # Load the trained weights
+                            online_regression_head.load_state_dict(callback_state['state_dict'])
+                            
+                            # Replace the random classifier with the trained one
+                            self.backbone.classifier = online_regression_head
+                            print("✅ Loaded trained online regression head weights from checkpoint")
+                            online_regression_loaded = True
+                            break
+                        except Exception as e:
+                            print(f"⚠️  Warning: Could not load online regression head weights: {e}")
+                            import traceback
+                            traceback.print_exc()
+        
+        if not online_regression_loaded:
+            print("⚠️  WARNING: No online regression head weights found in checkpoint!")
+            print("   Using randomly initialized regression head from TIPBackbone")
+            print("   This will result in poor performance (random weights)")
+            print("   Expected RMSLE: ~1.2 (random) vs ~0.3 (trained)")
+        
         # Freeze backbone if requested
         if freeze_backbone:
             for param in self.backbone.parameters():
@@ -70,16 +115,22 @@ class TIPRegressionModel(nn.Module):
         else:
             print("Backbone trainable")
         
-        # Store normalization parameters from checkpoint (may be defaults)
-        # These will be overridden by actual dataset stats if available
-        self.target_mean = getattr(hparams, 'target_mean', 0.0)
-        self.target_std = getattr(hparams, 'target_std', 1.0)
-        self.target_log_transform = getattr(hparams, 'target_log_transform', True)
+        # Load target normalization stats from config file only
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(script_dir, 'configs', 'config_construction_cost_pretrain.yaml')
+        
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+        
+        config = OmegaConf.load(config_path)
+        self.target_mean = float(config.get('target_mean', 0.0))
+        self.target_std = float(config.get('target_std', 1.0))
+        self.target_log_transform = bool(config.get('target_log_transform', True))
         
         print(f"Model initialized (from checkpoint):")
         print(f"  Embedding dim: {hparams.multimodal_embedding_dim}")
-        print(f"  Target mean: {self.target_mean:.4f} (may be overridden by dataset)")
-        print(f"  Target std: {self.target_std:.4f} (may be overridden by dataset)")
+        print(f"  Target mean: {self.target_mean:.4f} (from config)")
+        print(f"  Target std: {self.target_std:.4f} (from config)")
         print(f"  Log transform: {self.target_log_transform}")
     
     def forward(self, x: Tuple) -> torch.Tensor:
@@ -145,7 +196,8 @@ def evaluate_validation(
     val_loader: DataLoader,
     device: torch.device,
     save_predictions: bool = True,
-    output_dir: str = None
+    output_dir: str = None,
+    checkpoint_path: Optional[str] = None
 ) -> dict:
     """
     Evaluate model on validation set.
@@ -161,15 +213,17 @@ def evaluate_validation(
     
     with torch.no_grad():
         for batch in val_loader:
-            # Unpack batch (same format as training)
-            # batch is: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, data_id)
+            # Unpack batch: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)
+            if len(batch) != 8:
+                raise ValueError(f"Expected batch size 8, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)")
             imaging_views = batch[0]
             tabular_views = batch[1]
             label = batch[2]
             unaugmented_image = batch[3]
             unaugmented_tabular = batch[4]
-            target = batch[5] if len(batch) > 5 else None
-            data_id = batch[6] if len(batch) > 6 else None
+            target = batch[5]  # Log-transformed target (for reference)
+            target_original = batch[6]  # Original scale target (for metrics)
+            data_id = batch[7]
             
             # Use unaugmented views for evaluation
             # Format: (image, tabular, mask)
@@ -184,23 +238,29 @@ def evaluate_validation(
             # Create mask (all ones for no missing values)
             mask = torch.ones_like(x_tabular, dtype=torch.bool).to(device)
             
-            # Forward pass
+            # Forward pass - model predicts in normalized log space
             pred_normalized = model((x_image, x_tabular, mask))  # (B, 1)
             
-            # Denormalize to original scale
-            pred_original = model.denormalize(pred_normalized.squeeze())  # (B,)
+            # Convert prediction from normalized log space to original scale (USD/m²)
+            # Step 1: Denormalize (reverse normalization)
+            pred_log = (pred_normalized.squeeze() * model.target_std) + model.target_mean  # (B,)
             
-            # Store predictions and targets
+            # Step 2: Reverse log-transform to get original scale
+            if model.target_log_transform:
+                pred_original = torch.expm1(pred_log)  # exp(x) - 1
+            else:
+                pred_original = pred_log
+            
+            # Ensure non-negative
+            pred_original = torch.clamp(pred_original, min=0.0)
+            
+            # Store predictions in original scale
             all_predictions.append(pred_original.cpu())
             
-            # Check if target is valid (not dummy)
-            # Dummy targets are 0.0, but real targets should be non-zero after normalization
-            # Better: check if dataset has targets by checking if target tensor has meaningful values
-            # For now, assume validation set always has targets
-            if target is not None and target.numel() > 0:
-                # Denormalize targets
-                target_denorm = model.denormalize(target.to(device))
-                all_targets.append(target_denorm.cpu())
+            # Use target_original (ground truth in original USD/m² scale) for metrics
+            if target_original is not None and target_original.numel() > 0:
+                # target_original is already in original scale, no denormalization needed
+                all_targets.append(target_original.cpu())
             
             # Store data IDs (data_id is a list from the batch)
             if data_id is not None:
@@ -250,19 +310,15 @@ def evaluate_validation(
                 'error': (all_predictions - all_targets).numpy(),
                 'abs_error': torch.abs(all_predictions - all_targets).numpy()
             })
-            pred_path = os.path.join(output_dir, 'val_predictions.csv')
+            # Generate filename with checkpoint name and timestamp
+            if checkpoint_path:
+                checkpoint_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
+            else:
+                checkpoint_name = 'unknown'
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            pred_path = os.path.join(output_dir, f'val_predictions_{checkpoint_name}_{timestamp}.csv')
             pred_df.to_csv(pred_path, index=False)
             print(f"Saved validation predictions to: {pred_path}")
-            
-            # Also save in submission format (with GT as additional column)
-            submission_df = pd.DataFrame({
-                'data_id': all_data_ids if all_data_ids else [f'sample_{i}' for i in range(len(all_predictions))],
-                'construction_cost_per_m2_usd': all_predictions.numpy(),
-                'ground_truth': all_targets.numpy()  # Additional column for validation
-            })
-            submission_path = os.path.join(output_dir, 'val_submission.csv')
-            submission_df.to_csv(submission_path, index=False)
-            print(f"Saved validation submission (with GT) to: {submission_path}")
     
     return metrics, all_predictions, all_data_ids
 
@@ -272,6 +328,7 @@ def run_inference(
     test_loader: DataLoader,
     device: torch.device,
     output_path: str,
+    checkpoint_path: Optional[str] = None,
     data_ids: list = None
 ):
     """
@@ -291,14 +348,17 @@ def run_inference(
     
     with torch.no_grad():
         for batch in test_loader:
-            # Unpack batch (same format as training)
+            # Unpack batch: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)
+            if len(batch) != 8:
+                raise ValueError(f"Expected batch size 8, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)")
             imaging_views = batch[0]
             tabular_views = batch[1]
             label = batch[2]
             unaugmented_image = batch[3]
             unaugmented_tabular = batch[4]
-            target = batch[5] if len(batch) > 5 else None
-            data_id = batch[6] if len(batch) > 6 else None
+            target = batch[5]  # Not used for test set
+            target_original = batch[6]  # Not used for test set
+            data_id = batch[7]
             
             # Use unaugmented views for inference
             x_image = unaugmented_image.to(device)  # (B, 15, H, W)
@@ -307,11 +367,21 @@ def run_inference(
             # Create mask (all ones for no missing values)
             mask = torch.ones_like(x_tabular, dtype=torch.bool).to(device)
             
-            # Forward pass
+            # Forward pass - model predicts in normalized log space
             pred_normalized = model((x_image, x_tabular, mask))  # (B, 1)
             
-            # Denormalize to original scale
-            pred_original = model.denormalize(pred_normalized.squeeze())  # (B,)
+            # Convert prediction from normalized log space to original scale (USD/m²)
+            # Step 1: Denormalize (reverse normalization)
+            pred_log = (pred_normalized.squeeze() * model.target_std) + model.target_mean  # (B,)
+            
+            # Step 2: Reverse log-transform to get original scale
+            if model.target_log_transform:
+                pred_original = torch.expm1(pred_log)  # exp(x) - 1
+            else:
+                pred_original = pred_log
+            
+            # Ensure non-negative
+            pred_original = torch.clamp(pred_original, min=0.0)
             
             # Store predictions
             all_predictions.append(pred_original.cpu())
@@ -335,6 +405,20 @@ def run_inference(
             'data_id': [f'test_{i}' for i in range(len(all_predictions))],
             'construction_cost_per_m2_usd': all_predictions
         })
+    
+    # Generate filename with checkpoint name and timestamp
+    if checkpoint_path:
+        checkpoint_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        # If output_path is a directory or ends with '/', create filename inside it
+        if os.path.isdir(output_path) or output_path.endswith('/'):
+            output_path = os.path.join(output_path, f'submission_{checkpoint_name}_{timestamp}.csv')
+        else:
+            # If output_path is a file path, insert checkpoint name and timestamp before extension
+            base_dir = os.path.dirname(output_path) or '.'
+            base_name = os.path.splitext(os.path.basename(output_path))[0]
+            ext = os.path.splitext(output_path)[1] or '.csv'
+            output_path = os.path.join(base_dir, f'{base_name}_{checkpoint_name}_{timestamp}{ext}')
     
     # Save submission
     submission_df.to_csv(output_path, index=False)
@@ -437,7 +521,8 @@ def main():
         val_loader=val_loader,
         device=device,
         save_predictions=True,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        checkpoint_path=args.checkpoint
     )
     
     # Load test dataset

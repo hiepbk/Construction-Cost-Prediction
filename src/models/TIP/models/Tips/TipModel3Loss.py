@@ -81,20 +81,19 @@ class TIP3Loss(Pretraining):
         return loss_itm, z, itm_labels
 
 
-    def training_step(self, batch: Tuple[List[torch.Tensor], List[torch.Tensor], torch.Tensor, torch.Tensor, List[torch.Tensor], Optional[torch.Tensor], Optional[list]], _) -> torch.Tensor:
+    def training_step(self, batch: Tuple[List[torch.Tensor], List[torch.Tensor], torch.Tensor, torch.Tensor, List[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[list]], _) -> torch.Tensor:
         '''
         Train
         Tabular-imaging contrastive learning
         Tabular reconstruction learning
         '''
-        # Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, regression_target, data_id)
-        # For pretraining, we ignore the regression_target (6th element) and data_id (7th element)
-        # data_id is only used for logging, not for training
-        if len(batch) == 7:
-            im_views, tab_views, y, _, original_tab, _, _ = batch  # Extract but ignore regression_target and data_id
+        # Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)
+        # For pretraining, we ignore target (6th), target_original (7th), and data_id (8th)
+        # These are only used for online regression evaluation, not for pretraining loss
+        if len(batch) == 8:
+            im_views, tab_views, y, _, original_tab, _, _, _ = batch  # Extract but ignore target, target_original, and data_id
         else:
-            # Fallback for old format (6 elements without data_id)
-            im_views, tab_views, y, _, original_tab, _ = batch
+            raise ValueError(f"Expected batch size 8, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)")
 
         # =======================================  itc    =======================================================================
         # Augmented image and unagumented tabular
@@ -132,14 +131,13 @@ class TIP3Loss(Pretraining):
         Tabular-imaging contrastive learning
         Tabular reconstruction learning
         '''
-        # Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, regression_target, data_id)
-        # For pretraining, we ignore the regression_target (6th element) and data_id (7th element)
-        # data_id is only used for logging, not for training
-        if len(batch) == 7:
-            im_views, tab_views, y, original_im, original_tab, _, _ = batch  # Extract but ignore regression_target and data_id
+        # Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)
+        # For pretraining, we ignore target (6th), target_original (7th), and data_id (8th)
+        # These are only used for online regression evaluation, not for pretraining loss
+        if len(batch) == 8:
+            im_views, tab_views, y, original_im, original_tab, _, _, _ = batch  # Extract but ignore target, target_original, and data_id
         else:
-            # Fallback for old format (6 elements without data_id)
-            im_views, tab_views, y, original_im, original_tab, _ = batch
+            raise ValueError(f"Expected batch size 8, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)")
 
         # =======================================  itc    =======================================================================
         # Unaugmented views

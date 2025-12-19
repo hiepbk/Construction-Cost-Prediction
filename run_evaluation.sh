@@ -5,7 +5,7 @@
 PROJECT_ROOT="/hdd/hiep/CODE/Construction_Cost_Prediction"
 
 # Set paths (absolute)
-CHECKPOINT="${PROJECT_ROOT}/work_dir/runs/multimodal/tip_pretrain_construction_cost_1218_1930/checkpoint_last_epoch_99.ckpt"
+CHECKPOINT="${PROJECT_ROOT}/work_dir/runs/multimodal/tip_pretrain_construction_cost_1219_1722/checkpoint_best_rmsle_84_0.2719.ckpt"
 VAL_CSV="${PROJECT_ROOT}/data/annotation/val/val_clean.csv"
 TEST_CSV="${PROJECT_ROOT}/data/annotation/test/test_clean.csv"
 COMPOSITE_DIR="${PROJECT_ROOT}/data/composites"

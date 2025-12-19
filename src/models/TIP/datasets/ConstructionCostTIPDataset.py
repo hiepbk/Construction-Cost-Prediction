@@ -539,7 +539,13 @@ class ConstructionCostTIPDataset(Dataset):
         else:
             data_id = f"sample_{index}"
         
-        return imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, data_id
+        # Target original (ground truth in original USD/m² scale, before any transformation)
+        if self.targets_original is not None:
+            target_original = torch.tensor(float(self.targets_original[index]), dtype=torch.float32)
+        else:
+            target_original = torch.tensor(0.0, dtype=torch.float32)
+        
+        return imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id
     
     def __len__(self) -> int:
         return len(self.data_tabular)

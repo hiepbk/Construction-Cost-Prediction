@@ -183,6 +183,19 @@ def pretrain(hparams, wandb_logger):
   # Create logdir based on WandB run name
   logdir = create_logdir(hparams.datatype, hparams.resume_training, wandb_logger)
   
+  # Ensure target normalization stats are in hparams (will be saved in checkpoint via save_hyperparameters)
+  # This ensures they are saved in the checkpoint for later use
+  if hparams.num_classes == 1:
+    from omegaconf import open_dict
+    with open_dict(hparams):
+      # Ensure these are set (they should already be from config, but make sure)
+      if not hasattr(hparams, 'target_mean'):
+        hparams.target_mean = 0.0
+      if not hasattr(hparams, 'target_std'):
+        hparams.target_std = 1.0
+      if not hasattr(hparams, 'target_log_transform'):
+        hparams.target_log_transform = True
+  
   model = select_model(hparams, train_dataset)
   
   callbacks = []

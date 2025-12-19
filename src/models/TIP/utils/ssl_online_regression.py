@@ -178,18 +178,12 @@ class SSLOnlineEvaluatorRegression(Callback):
             x_t = None
             data_ids = None
         elif self.multimodal and self.strategy == 'tip':
-            # TIP multimodal batch: (imaging_views, tabular_views, labels, unaugmented_image, unaugmented_tabular, target, data_id)
-            # For regression, target is included in batch (6th element), data_id is 7th element
-            if len(batch) == 7:
-                x_i, _, contrastive_labels, x_orig, x_t_orig, y, data_ids = batch
-            elif len(batch) == 6:
-                x_i, _, contrastive_labels, x_orig, x_t_orig, y = batch
-                data_ids = None
+            # TIP multimodal batch: (imaging_views, tabular_views, labels, unaugmented_image, unaugmented_tabular, target, target_original, data_id)
+            # Must have exactly 8 elements
+            if len(batch) == 8:
+                x_i, _, contrastive_labels, x_orig, x_t_orig, y, y_original, data_ids = batch
             else:
-                # Fallback for old format (no target) - should not happen if dataset is updated
-                x_i, _, contrastive_labels, x_orig, x_t_orig = batch
-                y = None
-                data_ids = None
+                raise ValueError(f"Expected batch size 8, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)")
             x = x_orig
             x_t = x_t_orig
         elif self.multimodal and self.strategy == 'comparison':
@@ -290,10 +284,9 @@ class SSLOnlineEvaluatorRegression(Callback):
         predictions_original_scale = torch.clamp(predictions_original_scale, min=0.0)
         targets_original_scale = torch.clamp(targets_original_scale, min=0.0)
         
-        # Extract data_ids from batch if available (7th element for TIP multimodal)
-        data_ids = None
-        if self.multimodal and self.strategy == 'tip' and len(batch) >= 7:
-            data_ids = batch[6]  # List of data_ids for this batch
+        # Extract data_ids from batch (8th element for TIP multimodal)
+        # data_ids is already extracted in to_device method, so it's already available
+        # This is just for consistency - data_ids should already be set from to_device
         
         return predictions_normalized, targets_normalized, predictions_original_scale, targets_original_scale, loss, data_ids
     
@@ -475,8 +468,6 @@ class SSLOnlineEvaluatorRegression(Callback):
             
             if logged_count == 0:
                 print(f"⚠️ Warning: No validation samples were logged. Available predictions: {list(self.tracked_val_preds.keys())}")
-            else:
-                print(f"✅ Logged {logged_count} validation samples to WandB (group: regression)")
         
         # Reset metrics for next epoch
         self.mae_val.reset()
