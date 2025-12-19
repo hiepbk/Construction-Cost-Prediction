@@ -1,0 +1,84 @@
+# TIP Fine-Tuning Config for Construction Cost Regression
+# Stage 2: Supervised Fine-Tuning
+
+defaults:
+  - _self_
+
+# Configure Hydra to use work_dir in project root instead of outputs
+hydra:
+  run:
+    dir: ${data_base}/work_dir/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  output_subdir: null  # Don't create outputs subdirectory
+
+# Task
+eval_datatype: multimodal
+strategy: tip
+task: regression
+use_construction_cost_dataset: true
+
+# Base directory for data paths (project root)
+data_base: /hdd/hiep/CODE/Construction_Cost_Prediction
+
+# Checkpoint from pretraining
+checkpoint: null  # Set to: work_dir/runs/multimodal/tip_pretrain_*/checkpoint_best_*.ckpt
+
+# Data paths (absolute paths)
+data_train_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean.csv
+data_val_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/test/test_clean.csv
+composite_dir: /hdd/hiep/CODE/Construction_Cost_Prediction/data/composites
+field_lengths_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/field_lengths.pt
+train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean_metadata.pkl
+val_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/test/test_clean_metadata.pkl
+labels_train_eval_imaging: null
+labels_val_eval_imaging: null
+
+# Model (inherited from checkpoint)
+use_satellite_encoder: true
+use_satlas: true
+sentinel2_model_id: Sentinel2_SwinB_SI_MS
+satellite_feature_dim: 512
+
+# Fine-Tuning Strategy
+finetune_strategy: trainable  # Options: frozen, trainable
+freeze_image: true  # Freeze image encoder initially
+freeze_tabular: false
+missing_tabular: false
+
+# Regression Head
+num_classes: 1
+regression_loss: huber  # Options: huber, mae, mse
+huber_delta: 1.0
+target_log_transform: true
+target_mean: 0.0  # Will be computed from data
+target_std: 1.0   # Will be computed from data
+
+# Training
+batch_size: 16
+lr_eval: 1e-4
+weight_decay_eval: 1e-5
+max_epochs: 50
+check_val_every_n_epoch: 1
+gpus: 1
+num_workers: 4
+pin_memory: true
+
+# Image
+img_size: 224
+eval_train_augment_rate: 0.0  # No augmentation for fine-tuning
+live_loading: false
+augmentation_speedup: true
+eval_one_hot: false
+delete_segmentation: false
+
+# Satellite-specific
+use_sentinel2: true
+use_viirs: true
+
+# Logging
+wandb_project: construction_cost_tip
+wandb_name: tip_finetune
+use_wandb: true  # Enable WandB online logging
+offline: false  # Set to false for online WandB logging
+wandb_entity: null  # Set to your WandB entity/username if needed
+wandb_id: null  # For resuming training
+
