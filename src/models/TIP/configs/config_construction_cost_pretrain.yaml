@@ -1,0 +1,136 @@
+# TIP Pretraining Config for Construction Cost Prediction
+# Stage 1: Self-Supervised Pretraining
+
+defaults:
+  - _self_
+
+# Configure Hydra to use work_dir in project root instead of outputs
+hydra:
+  run:
+    dir: ${data_base}/work_dir/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  output_subdir: null  # Don't create outputs subdirectory
+
+# Dataset
+datatype: multimodal
+strategy: tip
+use_construction_cost_dataset: true
+
+# Base directory for data paths (project root)
+data_base: /hdd/hiep/CODE/Construction_Cost_Prediction
+
+# Data paths (absolute paths)
+data_train_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean.csv
+data_val_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean.csv
+composite_dir: /hdd/hiep/CODE/Construction_Cost_Prediction/data/composites
+field_lengths_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/field_lengths.pt
+train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean_metadata.pkl
+val_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean_metadata.pkl
+labels_train: null  # Will be auto-generated
+labels_val: null    # Will be auto-generated
+
+# Pretrained checkpoints (optional)
+imaging_pretrain_checkpoint: null  # Path to pretrained imaging encoder checkpoint
+pretrained_imaging_strategy: trainable  # Options: frozen, trainable
+tabular_pretrain_checkpoint: null  # Path to pretrained tabular encoder checkpoint
+pretrained_tabular_strategy: frozen  # Options: frozen, trainable
+
+# Model Architecture
+model: satlas  # Options: satlas, resnet18, resnet50
+use_satellite_encoder: true
+use_satlas: true
+sentinel2_model_id: Sentinel2_SwinB_SI_MS
+satellite_feature_dim: 512
+freeze_backbone: false
+use_fpn: true
+
+# Tabular Encoder
+tabular_embedding_dim: 512
+tabular_transformer_num_layers: 4
+num_cat: 16  # 16 categorical features (from preprocessing)
+num_con: 3   # 3 numerical features (from preprocessing)
+embedding_dropout: 0.1
+drop_rate: 0.1
+
+# Multimodal Encoder
+multimodal_embedding_dim: 512
+multimodal_transformer_num_layers: 4
+
+# Projection Heads
+embedding_dim: 2048
+projection_dim: 128
+
+# Training
+batch_size: 32
+lr: 3e-4
+weight_decay: 1e-5
+lr_eval: 1e-3  # For fine-tuning stage
+weight_decay_eval: 1e-5  # For fine-tuning stage
+max_epochs: 100
+check_val_every_n_epoch: 5
+log_every_n_steps: 1  # Log every step (since we have small number of batches)
+gpus: 1
+num_workers: 4
+pin_memory: true
+
+# Scheduler
+scheduler: anneal  # Options: cosine, anneal
+warmup_epochs: 10  # Warmup epochs for anneal scheduler
+anneal_max_epochs: 100  # Max epochs for anneal scheduler (usually same as max_epochs)
+cosine_anneal_mult: 1.0  # Multiplier for cosine scheduler (if using cosine)
+dataset_length: null  # Will be set automatically from dataset size
+
+# Online evaluation (optional)
+classifier_freq: 10  # Frequency (in epochs) to run online classifier evaluation
+log_images: false  # Whether to log images during training
+
+# TIP Loss Parameters
+corruption_rate: 0.3
+replace_random_rate: 0.0
+replace_special_rate: 0.5
+temperature: 0.1
+lambda_0: 0.5  # Weight for ITC loss
+loss: clip  # Loss type for contrastive learning
+view: augmented  # View type for contrastive learning
+tr_loss: normal  # Tabular reconstruction loss type
+
+# Image Augmentation
+img_size: 224
+augmentation_rate: 0.95
+live_loading: false
+augmentation_speedup: true
+one_hot: false
+delete_segmentation: false
+
+# Satellite-specific
+use_sentinel2: true
+use_viirs: true
+
+# Logging
+wandb_project: construction_cost_tip
+wandb_name: tip_pretrain
+use_wandb: true  # Enable WandB online logging
+offline: false  # Set to false for online WandB logging
+wandb_entity: null  # Set to your WandB entity/username if needed
+wandb_id: null  # For resuming training
+exp_name: tip_pretrain
+target: construction_cost  # For logging purposes
+comment: "TIP pretraining for construction cost prediction"
+seed: 42
+pretrain: true
+evaluate: false
+test: false
+resume_training: false
+checkpoint: null
+generate_embeddings: false  # Set to true to generate embeddings only
+algorithm_name: TIP
+online_mlp: true  # Enable online regression evaluation
+num_classes: 1  # For regression
+regression_loss: huber  # Options: huber, mse, mae
+huber_delta: 1.0  # Delta parameter for Huber loss
+target_mean: 6.513477  # Mean of log(1 + target) values (computed from training dataset)
+target_std: 1.101045   # Std of log(1 + target) values (computed from training dataset)
+target_log_transform: true  # Whether targets are log-transformed (log1p)
+limit_train_batches: null
+limit_val_batches: null
+enable_progress_bar: true
+
