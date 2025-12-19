@@ -34,7 +34,7 @@ def load_datasets(hparams):
   if hparams.datatype == 'multimodal':
     transform = grab_image_augmentations(hparams.img_size, hparams.target, hparams.augmentation_speedup)
     with open_dict(hparams):
-      hparams.transform = transform.__repr__()
+    hparams.transform = transform.__repr__()
     if hparams.strategy == 'tip':
       # for TIP
       if hasattr(hparams, 'use_construction_cost_dataset') and hparams.use_construction_cost_dataset:
@@ -79,12 +79,12 @@ def load_datasets(hparams):
         )
       else:
         # Original TIP dataset
-        train_dataset = ContrastiveReconstructImagingAndTabularDataset(
+      train_dataset = ContrastiveReconstructImagingAndTabularDataset(
           data_path_imaging=hparams.data_train_imaging, delete_segmentation=hparams.delete_segmentation, augmentation=transform, augmentation_rate=hparams.augmentation_rate, 
           data_path_tabular=hparams.data_train_tabular, corruption_rate=hparams.corruption_rate, replace_random_rate=hparams.replace_random_rate, replace_special_rate=hparams.replace_special_rate, 
           field_lengths_tabular=hparams.field_lengths_tabular, one_hot_tabular=hparams.one_hot,
           labels_path=hparams.labels_train, img_size=hparams.img_size, live_loading=hparams.live_loading, augmentation_speedup=hparams.augmentation_speedup)
-        val_dataset = ContrastiveReconstructImagingAndTabularDataset(
+      val_dataset = ContrastiveReconstructImagingAndTabularDataset(
           data_path_imaging=hparams.data_val_imaging, delete_segmentation=hparams.delete_segmentation, augmentation=transform, augmentation_rate=hparams.augmentation_rate, 
           data_path_tabular=hparams.data_val_tabular, corruption_rate=hparams.corruption_rate, replace_random_rate=hparams.replace_random_rate, replace_special_rate=hparams.replace_special_rate, 
           field_lengths_tabular=hparams.field_lengths_tabular, one_hot_tabular=hparams.one_hot,
@@ -100,7 +100,7 @@ def load_datasets(hparams):
         data_path_tabular=hparams.data_val_tabular, corruption_rate=hparams.corruption_rate, field_lengths_tabular=hparams.field_lengths_tabular, one_hot_tabular=hparams.one_hot,
         labels_path=hparams.labels_val, img_size=hparams.img_size, live_loading=hparams.live_loading, augmentation_speedup=hparams.augmentation_speedup)
     with open_dict(hparams):
-      hparams.input_size = train_dataset.get_input_size()
+    hparams.input_size = train_dataset.get_input_size()
   elif hparams.datatype == 'tabular':
     # for SSL tabular models
     if hparams.algorithm_name == 'SCARF':
@@ -110,7 +110,7 @@ def load_datasets(hparams):
       train_dataset = MaskTabularDataset(hparams.data_train_tabular, hparams.labels_train, hparams.corruption_rate, hparams.field_lengths_tabular, hparams.one_hot)
       val_dataset = MaskTabularDataset(hparams.data_val_tabular, hparams.labels_val, hparams.corruption_rate, hparams.field_lengths_tabular, hparams.one_hot)
     with open_dict(hparams):
-      hparams.input_size = train_dataset.get_input_size()
+    hparams.input_size = train_dataset.get_input_size()
   else:
     raise Exception(f'Unknown datatype {hparams.datatype}')
   return train_dataset, val_dataset

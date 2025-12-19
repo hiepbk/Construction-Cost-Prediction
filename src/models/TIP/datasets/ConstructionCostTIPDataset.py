@@ -396,19 +396,8 @@ class ConstructionCostTIPDataset(Dataset):
                 )
             with rasterio.open(sentinel2_path) as src:
                 sentinel2 = src.read()  # (12, H, W)
-                # check if any element is nan,m if nan, print the index the warning
-                if np.isnan(sentinel2).any():
-                    print(f"❌ WARNING: Sentinel-2 file contains nan values: {sentinel2_path}")
-                    print(f"   Row index: {idx}, data_id: {row.get('data_id', 'unknown')}")
-                    print(f"   Check if the file is corrupted: {sentinel2_path}")
-                    print(f"   Check if the file is corrupted: {sentinel2_path}")
-                    
-                else:
-                    print(f"✅ Checked: Sentinel-2 file does not contain nan values: {sentinel2_path}")
-                    # print random 1 element of each channel of 12 channels
-                    for i in range(12):
-                        print(f"sentinel2[{i}]: {sentinel2[i][random.randint(0, sentinel2.shape[1]-1)][random.randint(0, sentinel2.shape[2]-1)]}")
-                
+                # Fill NaN values with 0 (standard practice for deep learning)
+                sentinel2 = np.nan_to_num(sentinel2, nan=0.0)
                 # Normalize to [0, 1]
                 sentinel2 = np.clip(sentinel2 / 10000.0, 0, 1).astype('float32')
         # else:
@@ -425,21 +414,12 @@ class ConstructionCostTIPDataset(Dataset):
                 )
             with rasterio.open(viirs_path) as src:
                 viirs = src.read(1)  # (H, W) single band
-                
-                # check if any element is nan,m if nan, print the index the warning
-                if np.isnan(viirs).any():
-                    print(f"❌ WARNING: VIIRS file contains nan values: {viirs_path}")
-                    print(f"   Row index: {idx}, data_id: {row.get('data_id', 'unknown')}")
-                    print(f"   Check if the file is corrupted: {viirs_path}")
-                    print(f"   Check if the file is corrupted: {viirs_path}")
-                
-                else:
-                    print(f"✅ Checked: VIIRS file does not contain nan values: {viirs_path}")
-                    # print random 1 element of the channel of 1 band
-                    print(f"viirs: {viirs[random.randint(0, viirs.shape[0]-1)][random.randint(0, viirs.shape[1]-1)]}")
-                
-                # Normalize
-                viirs = np.clip(viirs / 100.0, 0, 1).astype('float32')
+                # Fill NaN values with 0 (standard practice for deep learning)
+                viirs = np.nan_to_num(viirs, nan=0.0)
+                # Normalize using 99th percentile (473.52) to preserve most data while handling outliers
+                # Clips negative values to 0 (radiance should be non-negative)
+                viirs = np.clip(viirs, 0, None)  # Remove negative values first
+                viirs = np.clip(viirs / 473.52, 0, 1).astype('float32')
                 # Convert to 3 channels (repeat)
                 viirs = np.stack([viirs, viirs, viirs], axis=0)  # (3, H, W)
         # else:
