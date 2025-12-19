@@ -402,6 +402,12 @@ class ConstructionCostTIPDataset(Dataset):
                     print(f"   Row index: {idx}, data_id: {row.get('data_id', 'unknown')}")
                     print(f"   Check if the file is corrupted: {sentinel2_path}")
                     print(f"   Check if the file is corrupted: {sentinel2_path}")
+                    
+                else:
+                    print(f"✅ Checked: Sentinel-2 file does not contain nan values: {sentinel2_path}")
+                    # print random 1 element of each channel of 12 channels
+                    for i in range(12):
+                        print(f"sentinel2[{i}]: {sentinel2[i][random.randint(0, sentinel2.shape[1]-1)][random.randint(0, sentinel2.shape[2]-1)]}")
                 
                 # Normalize to [0, 1]
                 sentinel2 = np.clip(sentinel2 / 10000.0, 0, 1).astype('float32')
@@ -427,6 +433,10 @@ class ConstructionCostTIPDataset(Dataset):
                     print(f"   Check if the file is corrupted: {viirs_path}")
                     print(f"   Check if the file is corrupted: {viirs_path}")
                 
+                else:
+                    print(f"✅ Checked: VIIRS file does not contain nan values: {viirs_path}")
+                    # print random 1 element of the channel of 1 band
+                    print(f"viirs: {viirs[random.randint(0, viirs.shape[0]-1)][random.randint(0, viirs.shape[1]-1)]}")
                 
                 # Normalize
                 viirs = np.clip(viirs / 100.0, 0, 1).astype('float32')
@@ -520,13 +530,8 @@ class ConstructionCostTIPDataset(Dataset):
         """
         im = self._load_satellite_image(index)  # (15, H, W) - already resized to img_size
         
-        print(f"im: {im.shape}")
-        
-        #print random 1 element of each channel of 15 channels
-        for i in range(15):
-            print(f"im[{i}]: {im[i].shape}")
-            print(f"im[{i}]: {im[i][random.randint(0, im[i].shape[0]-1)][random.randint(0, im[i].shape[1]-1)]}")
-        
+        print(f"im shape after loading: {im.shape}")
+
         # Convert to numpy for albumentations (expects H, W, C)
         im_np = im.permute(1, 2, 0).numpy()  # (H, W, 15)
         
