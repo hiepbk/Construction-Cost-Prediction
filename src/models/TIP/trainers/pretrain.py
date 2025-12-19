@@ -1,6 +1,3 @@
-import os 
-import sys
-
 from torch import cuda
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
@@ -8,17 +5,11 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from omegaconf import open_dict
 
-from utils.utils import grab_image_augmentations, grab_wids, create_logdir
+from utils.utils import create_logdir
 from utils.ssl_online_custom import SSLOnlineEvaluator
 from utils.ssl_online_regression import SSLOnlineEvaluatorRegression
 
-from datasets.ContrastiveImagingAndTabularDataset import ContrastiveImagingAndTabularDataset
-from datasets.ContrastiveReconstructImagingAndTabularDataset import ContrastiveReconstructImagingAndTabularDataset
 from datasets.ConstructionCostTIPDataset import ConstructionCostTIPDataset
-from datasets.ContrastiveImageDataset import ContrastiveImageDataset
-from datasets.ContrastiveTabularDataset import ContrastiveTabularDataset
-from datasets.MaskTabularDataset import MaskTabularDataset
-
 from models.MultimodalSimCLR import MultimodalSimCLR
 from models.SimCLR import SimCLR
 from models.SwAV_Bolt import SwAV
@@ -31,88 +22,47 @@ from models.Tips.TipModel3Loss import TIP3Loss
 
 
 def load_datasets(hparams):
-  if hparams.datatype == 'multimodal':
-    transform = grab_image_augmentations(hparams.img_size, hparams.target, hparams.augmentation_speedup)
-    with open_dict(hparams):
-    hparams.transform = transform.__repr__()
-    if hparams.strategy == 'tip':
-      # for TIP
-      if hasattr(hparams, 'use_construction_cost_dataset') and hparams.use_construction_cost_dataset:
-        # Use our custom Construction Cost dataset
-        train_dataset = ConstructionCostTIPDataset(
-          csv_path=hparams.data_train_tabular,
-          composite_dir=hparams.composite_dir_trainval,
-          field_lengths_tabular=hparams.field_lengths_tabular,
-          labels_path=hparams.labels_train,
-          img_size=hparams.img_size,
-          is_train=True,
-          corruption_rate=hparams.corruption_rate,
-          replace_random_rate=hparams.replace_random_rate,
-          replace_special_rate=hparams.replace_special_rate,
-          augmentation_rate=hparams.augmentation_rate,
-          one_hot_tabular=hparams.one_hot,
-          use_sentinel2=hparams.use_sentinel2,
-          use_viirs=hparams.use_viirs,
-          live_loading=hparams.live_loading,
-          augmentation_speedup=hparams.augmentation_speedup,
-          target_log_transform=getattr(hparams, 'target_log_transform', True),
-          metadata_path=getattr(hparams, 'train_metadata_path', None)
-        )
-        val_dataset = ConstructionCostTIPDataset(
-          csv_path=hparams.data_val_tabular,
-          composite_dir=hparams.composite_dir_trainval,
-          field_lengths_tabular=hparams.field_lengths_tabular,
-          labels_path=hparams.labels_val,
-          img_size=hparams.img_size,
-          is_train=False,
-          corruption_rate=hparams.corruption_rate,
-          replace_random_rate=hparams.replace_random_rate,
-          replace_special_rate=hparams.replace_special_rate,
-          augmentation_rate=hparams.augmentation_rate,
-          one_hot_tabular=hparams.one_hot,
-          use_sentinel2=hparams.use_sentinel2,
-          use_viirs=hparams.use_viirs,
-          live_loading=hparams.live_loading,
-          augmentation_speedup=hparams.augmentation_speedup,
-          target_log_transform=getattr(hparams, 'target_log_transform', True),
-          metadata_path=getattr(hparams, 'val_metadata_path', None)
-        )
-      else:
-        # Original TIP dataset
-      train_dataset = ContrastiveReconstructImagingAndTabularDataset(
-          data_path_imaging=hparams.data_train_imaging, delete_segmentation=hparams.delete_segmentation, augmentation=transform, augmentation_rate=hparams.augmentation_rate, 
-          data_path_tabular=hparams.data_train_tabular, corruption_rate=hparams.corruption_rate, replace_random_rate=hparams.replace_random_rate, replace_special_rate=hparams.replace_special_rate, 
-          field_lengths_tabular=hparams.field_lengths_tabular, one_hot_tabular=hparams.one_hot,
-          labels_path=hparams.labels_train, img_size=hparams.img_size, live_loading=hparams.live_loading, augmentation_speedup=hparams.augmentation_speedup)
-      val_dataset = ContrastiveReconstructImagingAndTabularDataset(
-          data_path_imaging=hparams.data_val_imaging, delete_segmentation=hparams.delete_segmentation, augmentation=transform, augmentation_rate=hparams.augmentation_rate, 
-          data_path_tabular=hparams.data_val_tabular, corruption_rate=hparams.corruption_rate, replace_random_rate=hparams.replace_random_rate, replace_special_rate=hparams.replace_special_rate, 
-          field_lengths_tabular=hparams.field_lengths_tabular, one_hot_tabular=hparams.one_hot,
-          labels_path=hparams.labels_val, img_size=hparams.img_size, live_loading=hparams.live_loading, augmentation_speedup=hparams.augmentation_speedup)
-    else:
-      # for MMCL
-      train_dataset = ContrastiveImagingAndTabularDataset(
-        data_path_imaging=hparams.data_train_imaging, delete_segmentation=hparams.delete_segmentation, augmentation=transform, augmentation_rate=hparams.augmentation_rate, 
-        data_path_tabular=hparams.data_train_tabular, corruption_rate=hparams.corruption_rate, field_lengths_tabular=hparams.field_lengths_tabular, one_hot_tabular=hparams.one_hot,
-        labels_path=hparams.labels_train, img_size=hparams.img_size, live_loading=hparams.live_loading, augmentation_speedup=hparams.augmentation_speedup)
-      val_dataset = ContrastiveImagingAndTabularDataset(
-        data_path_imaging=hparams.data_val_imaging, delete_segmentation=hparams.delete_segmentation, augmentation=transform, augmentation_rate=hparams.augmentation_rate, 
-        data_path_tabular=hparams.data_val_tabular, corruption_rate=hparams.corruption_rate, field_lengths_tabular=hparams.field_lengths_tabular, one_hot_tabular=hparams.one_hot,
-        labels_path=hparams.labels_val, img_size=hparams.img_size, live_loading=hparams.live_loading, augmentation_speedup=hparams.augmentation_speedup)
-    with open_dict(hparams):
+  """Load ConstructionCostTIPDataset for train and validation."""
+  train_dataset = ConstructionCostTIPDataset(
+    csv_path=hparams.data_train_tabular,
+    composite_dir=hparams.composite_dir_trainval,
+    field_lengths_tabular=hparams.field_lengths_tabular,
+    labels_path=hparams.labels_train,
+    img_size=hparams.img_size,
+    is_train=True,
+    corruption_rate=hparams.corruption_rate,
+    replace_random_rate=hparams.replace_random_rate,
+    replace_special_rate=hparams.replace_special_rate,
+    augmentation_rate=hparams.augmentation_rate,
+    one_hot_tabular=hparams.one_hot,
+    use_sentinel2=hparams.use_sentinel2,
+    use_viirs=hparams.use_viirs,
+    live_loading=hparams.live_loading,
+    augmentation_speedup=hparams.augmentation_speedup,
+    target_log_transform=getattr(hparams, 'target_log_transform', True),
+    metadata_path=getattr(hparams, 'train_metadata_path', None)
+  )
+  val_dataset = ConstructionCostTIPDataset(
+    csv_path=hparams.data_val_tabular,
+    composite_dir=hparams.composite_dir_trainval,
+    field_lengths_tabular=hparams.field_lengths_tabular,
+    labels_path=hparams.labels_val,
+    img_size=hparams.img_size,
+    is_train=False,
+    corruption_rate=hparams.corruption_rate,
+    replace_random_rate=hparams.replace_random_rate,
+    replace_special_rate=hparams.replace_special_rate,
+    augmentation_rate=hparams.augmentation_rate,
+    one_hot_tabular=hparams.one_hot,
+    use_sentinel2=hparams.use_sentinel2,
+    use_viirs=hparams.use_viirs,
+    live_loading=hparams.live_loading,
+    augmentation_speedup=hparams.augmentation_speedup,
+    target_log_transform=getattr(hparams, 'target_log_transform', True),
+    metadata_path=getattr(hparams, 'val_metadata_path', None)
+  )
+  with open_dict(hparams):
     hparams.input_size = train_dataset.get_input_size()
-  elif hparams.datatype == 'tabular':
-    # for SSL tabular models
-    if hparams.algorithm_name == 'SCARF':
-      train_dataset = ContrastiveTabularDataset(hparams.data_train_tabular, hparams.labels_train, hparams.corruption_rate, hparams.field_lengths_tabular, hparams.one_hot)
-      val_dataset = ContrastiveTabularDataset(hparams.data_val_tabular, hparams.labels_val, hparams.corruption_rate, hparams.field_lengths_tabular, hparams.one_hot)
-    elif hparams.algorithm_name == 'VIME':
-      train_dataset = MaskTabularDataset(hparams.data_train_tabular, hparams.labels_train, hparams.corruption_rate, hparams.field_lengths_tabular, hparams.one_hot)
-      val_dataset = MaskTabularDataset(hparams.data_val_tabular, hparams.labels_val, hparams.corruption_rate, hparams.field_lengths_tabular, hparams.one_hot)
-    with open_dict(hparams):
-    hparams.input_size = train_dataset.get_input_size()
-  else:
-    raise Exception(f'Unknown datatype {hparams.datatype}')
   return train_dataset, val_dataset
 
 
@@ -202,7 +152,7 @@ def pretrain(hparams, wandb_logger):
 
   if hparams.online_mlp:
     model.hparams.classifier_freq = float('Inf')
-    z_dim =  hparams.multimodal_embedding_dim if hparams.strategy=='tip' else model.pooled_dim
+    z_dim = hparams.multimodal_embedding_dim if hparams.strategy=='tip' else model.pooled_dim
     
     # Use regression evaluator for regression tasks (num_classes=1)
     if hparams.num_classes == 1:
