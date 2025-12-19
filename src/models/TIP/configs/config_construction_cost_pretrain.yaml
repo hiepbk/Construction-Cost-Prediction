@@ -109,8 +109,8 @@ use_viirs: true
 # Logging
 wandb_project: construction_cost_tip
 wandb_name: tip_pretrain
-use_wandb: fasle  # Enable WandB online logging
-offline: true  # Set to false for online WandB logging
+use_wandb: true  # Enable WandB online logging
+offline: false  # Set to false for online WandB logging
 wandb_entity: null  # Set to your WandB entity/username if needed
 wandb_id: null  # For resuming training
 exp_name: tip_pretrain
