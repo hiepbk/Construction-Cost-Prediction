@@ -11,10 +11,13 @@ hydra:
   output_subdir: null  # Don't create outputs subdirectory
 
 # Task
+datatype: multimodal  # Required by run.py (used for checkpoint path)
 eval_datatype: multimodal
 strategy: tip
 task: regression
 use_construction_cost_dataset: true
+algorithm_name: TIP  # Required by run.py
+target: construction_cost  # Required by run.py (for logging and exp name)
 
 # Base directory for data paths (project root)
 data_base: /hdd/hiep/CODE/Construction_Cost_Prediction
@@ -30,8 +33,8 @@ composite_dir_test: /hdd/hiep/CODE/Construction_Cost_Prediction/data/test_compos
 field_lengths_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/field_lengths.pt
 train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean_metadata.pkl
 val_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/test/test_clean_metadata.pkl
-labels_train_eval_imaging: null
-labels_val_eval_imaging: null
+labels_train_eval_imaging: null  # Not needed for fine-tuning - targets are in CSV file
+labels_val_eval_imaging: null  # Not needed for fine-tuning - targets are in CSV file
 
 # Model (inherited from checkpoint)
 use_satellite_encoder: true
@@ -40,28 +43,43 @@ sentinel2_model_id: Sentinel2_SwinB_SI_MS
 satellite_feature_dim: 512
 
 # Fine-Tuning Strategy
-finetune_strategy: trainable  # Options: frozen, trainable
-freeze_image: true  # Freeze image encoder initially
-freeze_tabular: false
+finetune_strategy: frozen  # Freeze entire pretrained backbone (image + tabular + multimodal encoders)
+freeze_image: true  # Freeze image encoder (redundant if finetune_strategy=frozen, but kept for clarity)
+freeze_tabular: true  # Freeze tabular encoder (redundant if finetune_strategy=frozen, but kept for clarity)
 missing_tabular: false
+# Note: Only the regression head (classifier) will be trained when finetune_strategy=frozen
 
 # Regression Head
 num_classes: 1
 regression_loss: huber  # Options: huber, mae, mse
 huber_delta: 1.0
 target_log_transform: true
-target_mean: 0.0  # Will be computed from data
-target_std: 1.0   # Will be computed from data
+target_mean: 6.513477  # From preprocessing (log space) - must match pretrain config
+target_std: 1.101045   # From preprocessing (log space) - must match pretrain config
 
 # Training
 batch_size: 16
-lr_eval: 1e-4
-weight_decay_eval: 1e-5
+lr: 3e-4  # Pretrain LR (not used in fine-tuning, but required by run.py)
+weight_decay: 1e-5  # Pretrain weight decay (not used in fine-tuning, but required by run.py)
+lr_eval: 1e-4  # Fine-tuning learning rate (used for regression head)
+weight_decay_eval: 1e-5  # Fine-tuning weight decay
 max_epochs: 50
+
+# TIP Loss Parameters (not used in fine-tuning, but required by run.py)
+corruption_rate: 0.0  # Not used during fine-tuning
+temperature: 0.1  # Not used during fine-tuning
+replace_special_rate: 0.0  # Not used during fine-tuning
 check_val_every_n_epoch: 1
+val_check_interval: 1.0  # Check validation every epoch
+eval_metric: mae  # Metric to monitor for best checkpoint (mae, rmse, r2)
+limit_train_batches: null  # Use all training batches
+limit_val_batches: null  # Use all validation batches
 gpus: 1
 num_workers: 4
 pin_memory: true
+seed: 42
+resume_training: false
+test_and_eval: false  # Set to true to run test set evaluation after training
 
 # Image
 img_size: 224
@@ -75,6 +93,12 @@ delete_segmentation: false
 use_sentinel2: true
 use_viirs: true
 
+# Training Mode Flags
+pretrain: false  # Set to true for pretraining
+evaluate: true   # Set to true for fine-tuning/evaluation
+test: false     # Set to true for testing
+generate_embeddings: false  # Set to true to generate embeddings only
+
 # Logging
 wandb_project: construction_cost_tip
 wandb_name: tip_finetune
@@ -82,4 +106,6 @@ use_wandb: true  # Enable WandB online logging
 offline: false  # Set to false for online WandB logging
 wandb_entity: null  # Set to your WandB entity/username if needed
 wandb_id: null  # For resuming training
+exp_name: tip_finetune
+comment: "TIP fine-tuning for construction cost regression (frozen backbone)"
 

@@ -19,9 +19,56 @@ from datasets.TabularDataset import TabularDataset
 from models.Evaluator import Evaluator
 from models.Evaluator_regression import Evaluator_Regression
 from utils.utils import grab_arg_from_checkpoint, grab_hard_eval_image_augmentations, grab_wids, create_logdir
+from omegaconf import open_dict
 
 def load_datasets(hparams):
-  if hparams.eval_datatype=='imaging':
+  # Check if using ConstructionCostTIPDataset
+  use_construction_cost_dataset = getattr(hparams, 'use_construction_cost_dataset', False)
+  
+  if use_construction_cost_dataset and hparams.eval_datatype == 'multimodal':
+    # Use ConstructionCostTIPDataset for construction cost fine-tuning
+    from datasets.ConstructionCostTIPDataset import ConstructionCostTIPDataset
+    train_dataset = ConstructionCostTIPDataset(
+      csv_path=hparams.data_train_eval_tabular,
+      composite_dir=hparams.composite_dir_trainval,
+      field_lengths_tabular=hparams.field_lengths_tabular,
+      labels_path=hparams.labels_train_eval_imaging,  # Contains targets
+      img_size=grab_arg_from_checkpoint(hparams, 'img_size'),
+      is_train=True,
+      corruption_rate=0.0,  # No corruption during fine-tuning
+      replace_random_rate=0.0,
+      replace_special_rate=0.0,
+      augmentation_rate=hparams.eval_train_augment_rate,
+      one_hot_tabular=hparams.eval_one_hot,
+      use_sentinel2=hparams.use_sentinel2,
+      use_viirs=hparams.use_viirs,
+      live_loading=hparams.live_loading,
+      augmentation_speedup=hparams.augmentation_speedup,
+      target_log_transform=getattr(hparams, 'target_log_transform', True),
+      metadata_path=getattr(hparams, 'train_metadata_path', None)
+    )
+    val_dataset = ConstructionCostTIPDataset(
+      csv_path=hparams.data_val_eval_tabular,
+      composite_dir=hparams.composite_dir_trainval,
+      field_lengths_tabular=hparams.field_lengths_tabular,
+      labels_path=hparams.labels_val_eval_imaging,  # Contains targets
+      img_size=grab_arg_from_checkpoint(hparams, 'img_size'),
+      is_train=False,
+      corruption_rate=0.0,
+      replace_random_rate=0.0,
+      replace_special_rate=0.0,
+      augmentation_rate=0.0,  # No augmentation for validation
+      one_hot_tabular=hparams.eval_one_hot,
+      use_sentinel2=hparams.use_sentinel2,
+      use_viirs=hparams.use_viirs,
+      live_loading=hparams.live_loading,
+      augmentation_speedup=hparams.augmentation_speedup,
+      target_log_transform=getattr(hparams, 'target_log_transform', True),
+      metadata_path=getattr(hparams, 'val_metadata_path', None)
+    )
+    with open_dict(hparams):
+      hparams.input_size = train_dataset.get_input_size()
+  elif hparams.eval_datatype=='imaging':
       train_dataset = ImageDataset(hparams.data_train_eval_imaging, hparams.labels_train_eval_imaging, hparams.delete_segmentation, hparams.eval_train_augment_rate, grab_arg_from_checkpoint(hparams, 'img_size'), target=hparams.target, train=True, live_loading=hparams.live_loading, task=hparams.task,
                                    dataset_name=hparams.dataset_name, augmentation_speedup=hparams.augmentation_speedup)
       val_dataset = ImageDataset(hparams.data_val_eval_imaging, hparams.labels_val_eval_imaging, hparams.delete_segmentation, hparams.eval_train_augment_rate, grab_arg_from_checkpoint(hparams, 'img_size'), target=hparams.target, train=False, live_loading=hparams.live_loading, task=hparams.task,
@@ -42,7 +89,8 @@ def load_datasets(hparams):
       data_base=hparams.data_base, missing_tabular=hparams.missing_tabular, missing_strategy=hparams.missing_strategy, missing_rate=hparams.missing_rate,
       augmentation_speedup=hparams.augmentation_speedup,algorithm_name=hparams.algorithm_name
     )
-    hparams.input_size = train_dataset.get_input_size()
+    with open_dict(hparams):
+      hparams.input_size = train_dataset.get_input_size()
   elif hparams.eval_datatype == 'tabular':
     train_dataset = TabularDataset(hparams.data_train_eval_tabular, hparams.labels_train_eval_tabular, hparams.eval_train_augment_rate, hparams.corruption_rate, train=True, 
                                   eval_one_hot=hparams.eval_one_hot, field_lengths_tabular=hparams.field_lengths_tabular,
@@ -50,7 +98,8 @@ def load_datasets(hparams):
     val_dataset = TabularDataset(hparams.data_val_eval_tabular, hparams.labels_val_eval_tabular, hparams.eval_train_augment_rate, hparams.corruption_rate, train=False, 
                                 eval_one_hot=hparams.eval_one_hot, field_lengths_tabular=hparams.field_lengths_tabular,
                                 data_base=hparams.data_base, strategy=hparams.strategy, missing_tabular=hparams.missing_tabular, missing_strategy=hparams.missing_strategy, missing_rate=hparams.missing_rate,target=hparams.target)
-    hparams.input_size = train_dataset.get_input_size()
+    with open_dict(hparams):
+      hparams.input_size = train_dataset.get_input_size()
   elif hparams.eval_datatype == 'imaging_and_tabular':
     train_dataset = ImagingAndTabularDataset(
       hparams.data_train_eval_imaging, hparams.delete_segmentation, hparams.augmentation_rate, 
@@ -66,7 +115,8 @@ def load_datasets(hparams):
       corruption_rate=hparams.corruption_rate, data_base=hparams.data_base, augmentation_speedup=hparams.augmentation_speedup,
        missing_tabular=hparams.missing_tabular, missing_strategy=hparams.missing_strategy, missing_rate=hparams.missing_rate,algorithm_name=hparams.algorithm_name
     )
-    hparams.input_size = train_dataset.get_input_size()
+    with open_dict(hparams):
+      hparams.input_size = train_dataset.get_input_size()
   else:
     raise Exception('argument dataset must be set to imaging, tabular, multimodal or imaging_and_tabular')
   return train_dataset, val_dataset
@@ -121,7 +171,12 @@ def evaluate(hparams, wandb_logger):
 
   logdir = create_logdir('eval', hparams.resume_training, wandb_logger)
 
-  if hparams.task == 'regression':
+  # Use Evaluator_ConstructionCost if use_construction_cost_dataset is True
+  use_construction_cost_dataset = getattr(hparams, 'use_construction_cost_dataset', False)
+  if use_construction_cost_dataset and hparams.task == 'regression':
+    from models.Evaluator_ConstructionCost import Evaluator_ConstructionCost
+    model = Evaluator_ConstructionCost(hparams)
+  elif hparams.task == 'regression':
     model = Evaluator_Regression(hparams)
   else:
     model = Evaluator(hparams)
@@ -158,13 +213,15 @@ def evaluate(hparams, wandb_logger):
       data_base=hparams.data_base, missing_tabular=hparams.missing_tabular, missing_strategy=hparams.missing_strategy, missing_rate=hparams.missing_rate,
       augmentation_speedup=hparams.augmentation_speedup,algorithm_name=hparams.algorithm_name
     )
-      hparams.input_size = test_dataset.get_input_size()
+      with open_dict(hparams):
+        hparams.input_size = test_dataset.get_input_size()
     elif hparams.eval_datatype == 'tabular':
       test_dataset = TabularDataset(hparams.data_test_eval_tabular, hparams.labels_test_eval_tabular, 0, 0, train=False, 
                                   eval_one_hot=hparams.eval_one_hot, field_lengths_tabular=hparams.field_lengths_tabular,
                                   data_base=hparams.data_base, 
                                   strategy=hparams.strategy, missing_tabular=hparams.missing_tabular, missing_strategy=hparams.missing_strategy, missing_rate=hparams.missing_rate,target=hparams.target)
-      hparams.input_size = test_dataset.get_input_size()
+      with open_dict(hparams):
+        hparams.input_size = test_dataset.get_input_size()
     elif hparams.eval_datatype == 'imaging_and_tabular':
       test_dataset = ImagingAndTabularDataset(
         hparams.data_test_eval_imaging, hparams.delete_segmentation, 0, 
@@ -172,7 +229,8 @@ def evaluate(hparams, wandb_logger):
         hparams.labels_test_eval_imaging, hparams.img_size, hparams.live_loading, train=False, target=hparams.target,
         corruption_rate=0.0, data_base=hparams.data_base, missing_tabular=hparams.missing_tabular, missing_strategy=hparams.missing_strategy, missing_rate=hparams.missing_rate,
         augmentation_speedup=hparams.augmentation_speedup,algorithm_name=hparams.algorithm_name)
-      hparams.input_size = test_dataset.get_input_size()
+      with open_dict(hparams):
+        hparams.input_size = test_dataset.get_input_size()
     else:
       raise Exception('argument dataset must be set to imaging, tabular or multimodal')
     

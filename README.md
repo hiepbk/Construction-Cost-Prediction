@@ -338,6 +338,60 @@ python run.py pretrain=True
 
 All pretrained models are automatically downloaded when first used.
 
+### Fine-Tuning (Stage 2)
+
+After pretraining, fine-tune the regression head on the frozen pretrained backbone:
+
+**Basic Fine-Tuning Command:**
+```bash
+conda activate ccp
+cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
+python run.py \
+    --config-name=config_construction_cost_finetune \
+    checkpoint=/hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/multimodal/tip_pretrain_*/checkpoint_best_rmsle_*.ckpt \
+    batch_size=16 \
+    max_epochs=50 \
+    lr_eval=1e-4
+```
+
+**Recommended Fine-Tuning Command:**
+```bash
+conda activate ccp
+cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
+python run.py \
+    --config-name=config_construction_cost_finetune \
+    checkpoint=/hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/multimodal/tip_pretrain_construction_cost_1219_2130/checkpoint_last_epoch_99.ckpt
+```
+
+**Note:** The checkpoint path must be an **absolute path** or relative to the project root. Since the script runs from `src/models/TIP`, use absolute paths like `/hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/...`
+
+**Note:** The `evaluate=True` flag is already set in the fine-tuning config, so you don't need to specify it. You can override it if needed.
+
+**Fine-Tuning Strategy:**
+- **Frozen Backbone**: The entire pretrained backbone (image encoder, tabular encoder, multimodal encoder) is frozen
+- **Trainable Head**: Only the regression head (classifier) is trained
+- This approach is faster and requires less memory, while leveraging the pretrained representations
+
+**Fine-Tuning Outputs:**
+- Checkpoints saved to: `work_dir/runs/eval/{wandb_run_name}/`
+  - `checkpoint_best_mae.ckpt` - Best checkpoint based on validation MAE
+- WandB logs: Training and validation metrics
+
+**Key Config Parameters:**
+- `checkpoint`: Path to pretrained checkpoint (required)
+- `finetune_strategy`: Set to `frozen` to freeze backbone (default: `frozen`)
+- `batch_size`: Batch size for fine-tuning (default: 16)
+- `max_epochs`: Number of fine-tuning epochs (default: 50)
+- `lr_eval`: Learning rate for regression head (default: 1e-4)
+- `target_mean`: Target normalization mean (must match pretrain config)
+- `target_std`: Target normalization std (must match pretrain config)
+- `eval_metric`: Metric to monitor (`mae`, `rmse`, `r2`)
+
+**Note:** 
+- The fine-tuning config (`config_construction_cost_finetune.yaml`) must have the same `target_mean` and `target_std` as the pretraining config
+- Only the regression head weights are updated during fine-tuning
+- The pretrained backbone remains frozen to preserve learned representations
+
 ### Evaluation
 
 After training, you can evaluate your model on the validation set and generate predictions for the test set:
