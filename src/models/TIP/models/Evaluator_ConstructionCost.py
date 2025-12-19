@@ -52,18 +52,27 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         else:
             raise ValueError(f"Unknown loss type: {loss_type}. Options: 'rmsle', 'huber', 'mae', 'mse'")
         
-        # Metrics (in log space)
+        # Metrics (on original scale, like pretraining)
         self.mae_train = torchmetrics.MeanAbsoluteError()
         self.mae_val = torchmetrics.MeanAbsoluteError()
         self.mae_test = torchmetrics.MeanAbsoluteError()
         
-        self.rmse_train = torchmetrics.MeanSquaredError()
+        self.rmse_train = torchmetrics.MeanSquaredError()  # Will take sqrt later
         self.rmse_val = torchmetrics.MeanSquaredError()
         self.rmse_test = torchmetrics.MeanSquaredError()
+        
+        # RMSLE: Use MSE on log1p values, then take sqrt
+        self.rmsle_train = torchmetrics.MeanSquaredError()
+        self.rmsle_val = torchmetrics.MeanSquaredError()
+        self.rmsle_test = torchmetrics.MeanSquaredError()
         
         self.r2_train = torchmetrics.R2Score()
         self.r2_val = torchmetrics.R2Score()
         self.r2_test = torchmetrics.R2Score()
+        
+        # Track predictions for WandB logging (like pretraining)
+        self.tracked_val_preds = {}  # Dict: {data_id: prediction_value}
+        self.tracked_val_targets = {}  # Dict: {data_id: target_value}
         
         # Target normalization parameters (for denormalization)
         self.target_mean = getattr(hparams, 'target_mean', 0.0)
@@ -182,28 +191,49 @@ class Evaluator_ConstructionCost(pl.LightningModule):
             # For other losses (Huber, MAE, MSE), use normalized log-transformed targets
             loss = self.criterion(y_hat.squeeze(), y.squeeze())
         
-        # Metrics (in log space)
-        y_hat_detached = y_hat.detach().squeeze()
-        y_detached = y.squeeze()
+        # Convert predictions and targets to original scale for metrics (like pretraining)
+        y_hat_original = self.denormalize_target(y_hat.detach().squeeze())
+        if y_original is not None:
+            y_true_original = y_original.squeeze()
+        else:
+            # Fallback: convert from log space
+            y_true_original = self.denormalize_target(y.detach().squeeze())
         
-        self.mae_train(y_hat_detached, y_detached)
-        self.rmse_train(y_hat_detached, y_detached)
-        self.r2_train(y_hat_detached, y_detached)
+        # Ensure non-negative
+        y_hat_original = torch.clamp(y_hat_original, min=0.0)
+        y_true_original = torch.clamp(y_true_original, min=0.0)
         
-        self.log('eval.train.loss', loss, on_epoch=True, on_step=False)
-        self.log('eval.train.mae', self.mae_train, on_epoch=True, on_step=False)
-        self.log('eval.train.rmse', torch.sqrt(self.rmse_train.compute()), on_epoch=True, on_step=False)
+        # Update metrics on original scale (USD/m²)
+        self.mae_train(y_hat_original, y_true_original)
+        self.rmse_train(y_hat_original, y_true_original)
+        
+        # RMSLE: sqrt(mean((log1p(y_true) - log1p(y_pred))^2))
+        log_pred = torch.log1p(y_hat_original)
+        log_true = torch.log1p(y_true_original)
+        self.rmsle_train(log_pred, log_true)
+        
         # R2Score may fail if not enough samples - log safely
         try:
-            self.log('eval.train.r2', self.r2_train, on_epoch=True, on_step=False)
+            self.r2_train(y_hat_original, y_true_original)
+            r2_train_val = self.r2_train.compute()
         except ValueError:
-            pass  # Skip R2 if not enough samples
+            r2_train_val = torch.tensor(0.0, device=y_hat_original.device)
+        
+        self.log('eval.train.loss', loss, on_epoch=True, on_step=False, sync_dist=True)
+        self.log('eval.train.mae', self.mae_train, on_epoch=True, on_step=False, sync_dist=True)
+        self.log('eval.train.rmse', torch.sqrt(self.rmse_train.compute()), on_epoch=True, on_step=False, sync_dist=True)
+        self.log('eval.train.rmsle', torch.sqrt(self.rmsle_train.compute()), on_epoch=True, on_step=False, sync_dist=True)
+        self.log('eval.train.r2', r2_train_val, on_epoch=True, on_step=False, sync_dist=True)
+        # Primary metric for progress bar
+        self.log('train_rmsle', torch.sqrt(self.rmsle_train.compute()), on_epoch=True, on_step=False, prog_bar=True, logger=False, sync_dist=True)
         
         return loss
     
     def training_epoch_end(self, _) -> None:
         """Reset metrics after training epoch"""
+        self.mae_train.reset()
         self.rmse_train.reset()
+        self.rmsle_train.reset()
         self.r2_train.reset()
     
     def validation_step(self, batch: Tuple, _) -> None:
@@ -231,23 +261,54 @@ class Evaluator_ConstructionCost(pl.LightningModule):
             # For other losses (Huber, MAE, MSE), use normalized log-transformed targets
             loss = self.criterion(y_hat.squeeze(), y.squeeze())
         
-        # Metrics (in log space)
-        y_hat_detached = y_hat.detach().squeeze()
-        y_detached = y.squeeze()
+        # Convert predictions and targets to original scale for metrics (like pretraining)
+        y_hat_original = self.denormalize_target(y_hat.detach().squeeze())
+        if y_original is not None:
+            y_true_original = y_original.squeeze()
+        else:
+            # Fallback: convert from log space
+            y_true_original = self.denormalize_target(y.detach().squeeze())
         
-        self.mae_val(y_hat_detached, y_detached)
-        self.rmse_val(y_hat_detached, y_detached)
-        self.r2_val(y_hat_detached, y_detached)
+        # Ensure non-negative
+        y_hat_original = torch.clamp(y_hat_original, min=0.0)
+        y_true_original = torch.clamp(y_true_original, min=0.0)
         
-        self.log('eval.val.loss', loss, on_epoch=True, on_step=False)
+        # Track predictions for WandB logging (like pretraining)
+        if data_id is not None:
+            for idx, did in enumerate(data_id):
+                self.tracked_val_preds[str(did)] = float(y_hat_original[idx].cpu().detach())
+                self.tracked_val_targets[str(did)] = float(y_true_original[idx].cpu().detach())
+        
+        # Update metrics on original scale (USD/m²)
+        self.mae_val(y_hat_original, y_true_original)
+        self.rmse_val(y_hat_original, y_true_original)
+        
+        # RMSLE: sqrt(mean((log1p(y_true) - log1p(y_pred))^2))
+        log_pred = torch.log1p(y_hat_original)
+        log_true = torch.log1p(y_true_original)
+        self.rmsle_val(log_pred, log_true)
+        
+        # R2Score may fail if not enough samples
+        try:
+            self.r2_val(y_hat_original, y_true_original)
+        except ValueError:
+            pass  # Skip R2 if not enough samples
+        
+        self.log('eval.val.loss', loss, on_epoch=True, on_step=False, sync_dist=True)
+    
+    def on_validation_epoch_start(self) -> None:
+        """Clear tracked predictions at start of validation epoch"""
+        self.tracked_val_preds = {}
+        self.tracked_val_targets = {}
     
     def validation_epoch_end(self, _) -> None:
-        """Compute validation metrics"""
+        """Compute validation metrics and log predictions to WandB (like pretraining)"""
         if self.trainer.sanity_checking:
             return
         
         mae_val = self.mae_val.compute()
         rmse_val = torch.sqrt(self.rmse_val.compute())
+        rmsle_val = torch.sqrt(self.rmsle_val.compute())  # Primary metric
         
         # R2Score needs at least 2 samples - check before computing
         try:
@@ -256,9 +317,28 @@ class Evaluator_ConstructionCost(pl.LightningModule):
             # Not enough samples for R2 (e.g., during sanity check with small batches)
             r2_val = torch.tensor(0.0, device=mae_val.device)
         
-        self.log('eval.val.mae', mae_val, on_epoch=True, on_step=False, metric_attribute=self.mae_val)
-        self.log('eval.val.rmse', rmse_val, on_epoch=True, on_step=False)
-        self.log('eval.val.r2', r2_val, on_epoch=True, on_step=False, metric_attribute=self.r2_val)
+        # Log metrics (like pretraining)
+        self.log('eval.val.mae', mae_val, on_epoch=True, on_step=False, sync_dist=True, metric_attribute=self.mae_val)
+        self.log('eval.val.rmse', rmse_val, on_epoch=True, on_step=False, sync_dist=True)
+        self.log('eval.val.rmsle', rmsle_val, on_epoch=True, on_step=False, sync_dist=True)  # Primary metric
+        self.log('eval.val.r2', r2_val, on_epoch=True, on_step=False, sync_dist=True, metric_attribute=self.r2_val)
+        # Primary metric for progress bar
+        self.log('val_rmsle', rmsle_val, on_epoch=True, on_step=False, prog_bar=True, logger=False, sync_dist=True)
+        
+        # Log ALL tracked sample predictions with data_id to WandB (like pretraining)
+        if len(self.tracked_val_preds) > 0:
+            for data_id in self.tracked_val_preds.keys():
+                if data_id in self.tracked_val_targets:
+                    pred_val = self.tracked_val_preds[data_id]
+                    target_val = self.tracked_val_targets[data_id]
+                    
+                    # Format: "data_id: {data_id}, {ground_truth_value:.2f} USD/m²"
+                    title = f"data_id: {data_id}, {target_val:.2f} USD/m²"
+                    
+                    # Log prediction with data_id and ground truth in the title
+                    # Group under "regression" chart group in WandB
+                    # The logged value is the FINAL prediction in USD/m² (original scale)
+                    self.log(f"regression/{title}", pred_val, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         
         # Track best metrics
         if mae_val < self.best_val_mae:
@@ -266,9 +346,13 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         if rmse_val < self.best_val_rmse:
             self.best_val_rmse = rmse_val
         
+        # Reset metrics and tracking for next epoch
         self.mae_val.reset()
         self.rmse_val.reset()
+        self.rmsle_val.reset()
         self.r2_val.reset()
+        self.tracked_val_preds = {}
+        self.tracked_val_targets = {}
     
     def test_step(self, batch: Tuple, _) -> None:
         """Test step"""
