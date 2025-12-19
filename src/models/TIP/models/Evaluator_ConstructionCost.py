@@ -36,16 +36,21 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         # Create TIP backbone with regression head
         self.model = TIPBackbone(hparams)
         
-        # Loss function: Huber (robust to outliers) or MAE
+        # Loss function: RMSLE (competition metric), Huber (robust to outliers), MAE, or MSE
         loss_type = getattr(hparams, 'regression_loss', 'huber')
-        if loss_type == 'huber':
+        self.loss_type = loss_type  # Store for later checking
+        if loss_type == 'rmsle':
+            # RMSLE: sqrt(mean((log1p(y_true) - log1p(y_pred))^2))
+            # This directly optimizes the competition metric
+            self.criterion = self._rmsle_loss
+        elif loss_type == 'huber':
             self.criterion = nn.HuberLoss(delta=getattr(hparams, 'huber_delta', 1.0))
         elif loss_type == 'mae':
             self.criterion = nn.L1Loss()
         elif loss_type == 'mse':
             self.criterion = nn.MSELoss()
         else:
-            raise ValueError(f"Unknown loss type: {loss_type}")
+            raise ValueError(f"Unknown loss type: {loss_type}. Options: 'rmsle', 'huber', 'mae', 'mse'")
         
         # Metrics (in log space)
         self.mae_train = torchmetrics.MeanAbsoluteError()
@@ -92,6 +97,46 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         
         return y_denorm
     
+    def _rmsle_loss(self, y_pred: torch.Tensor, y_true_original: torch.Tensor) -> torch.Tensor:
+        """
+        RMSLE Loss: sqrt(mean((log1p(y_true_orig) - log1p(y_pred_orig))^2))
+        
+        This directly optimizes the competition metric (RMSLE).
+        
+        IMPORTANT: 
+        - y_pred: Predicted values in normalized log space → convert to original scale
+        - y_true_original: Ground truth in ORIGINAL scale (USD/m²) - use directly, don't convert
+        
+        Args:
+            y_pred: Predicted values (in log-normalized space)
+            y_true_original: True values in ORIGINAL scale (USD/m²) - not normalized, not log-transformed
+        
+        Returns:
+            RMSLE loss (scalar tensor)
+        """
+        # Convert y_pred from normalized log space to original scale
+        # Step 1: Denormalize (reverse normalization)
+        y_pred_log = y_pred * self.target_std + self.target_mean
+        
+        # Step 2: Reverse log-transform to get original scale
+        if self.target_log_transform:
+            y_pred_original = torch.expm1(y_pred_log)  # exp(x) - 1
+        else:
+            y_pred_original = y_pred_log
+        
+        # Ensure non-negative
+        y_pred_original = torch.clamp(y_pred_original, min=0.0)
+        y_true_original = torch.clamp(y_true_original, min=0.0)
+        
+        # Compute RMSLE: sqrt(mean((log1p(y_true_orig) - log1p(y_pred_orig))^2))
+        log_pred = torch.log1p(y_pred_original)  # log(1 + y_pred)
+        log_true = torch.log1p(y_true_original)  # log(1 + y_true) - using original GT directly
+        
+        squared_log_error = (log_true - log_pred) ** 2
+        rmsle = torch.sqrt(torch.mean(squared_log_error))
+        
+        return rmsle
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass.
@@ -120,14 +165,22 @@ class Evaluator_ConstructionCost(pl.LightningModule):
             # Use unaugmented views for fine-tuning
             x = (unaugmented_image, unaugmented_tabular)
             y = target  # Target is already normalized and log-transformed
+            y_original = target_original  # Ground truth in original scale (USD/m²)
         elif len(batch) == 2:
             # Fallback for other datasets
             x, y = batch
+            y_original = None  # Not available for other datasets
         else:
             raise ValueError(f"Unexpected batch size: {len(batch)}. Expected 8 (ConstructionCostTIPDataset) or 2 (other datasets)")
         
         y_hat = self.forward(x)
-        loss = self.criterion(y_hat.squeeze(), y.squeeze())
+        
+        # For RMSLE loss, use original ground truth directly (not normalized/log-transformed)
+        if self.loss_type == 'rmsle' and y_original is not None:
+            loss = self.criterion(y_hat.squeeze(), y_original.squeeze())
+        else:
+            # For other losses (Huber, MAE, MSE), use normalized log-transformed targets
+            loss = self.criterion(y_hat.squeeze(), y.squeeze())
         
         # Metrics (in log space)
         y_hat_detached = y_hat.detach().squeeze()
@@ -140,7 +193,11 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         self.log('eval.train.loss', loss, on_epoch=True, on_step=False)
         self.log('eval.train.mae', self.mae_train, on_epoch=True, on_step=False)
         self.log('eval.train.rmse', torch.sqrt(self.rmse_train.compute()), on_epoch=True, on_step=False)
-        self.log('eval.train.r2', self.r2_train, on_epoch=True, on_step=False)
+        # R2Score may fail if not enough samples - log safely
+        try:
+            self.log('eval.train.r2', self.r2_train, on_epoch=True, on_step=False)
+        except ValueError:
+            pass  # Skip R2 if not enough samples
         
         return loss
     
@@ -157,14 +214,22 @@ class Evaluator_ConstructionCost(pl.LightningModule):
             # Use unaugmented views for validation
             x = (unaugmented_image, unaugmented_tabular)
             y = target  # Target is already normalized and log-transformed
+            y_original = target_original  # Ground truth in original scale (USD/m²)
         elif len(batch) == 2:
             # Fallback for other datasets
             x, y = batch
+            y_original = None  # Not available for other datasets
         else:
             raise ValueError(f"Unexpected batch size: {len(batch)}. Expected 8 (ConstructionCostTIPDataset) or 2 (other datasets)")
         
         y_hat = self.forward(x)
-        loss = self.criterion(y_hat.squeeze(), y.squeeze())
+        
+        # For RMSLE loss, use original ground truth directly (not normalized/log-transformed)
+        if self.loss_type == 'rmsle' and y_original is not None:
+            loss = self.criterion(y_hat.squeeze(), y_original.squeeze())
+        else:
+            # For other losses (Huber, MAE, MSE), use normalized log-transformed targets
+            loss = self.criterion(y_hat.squeeze(), y.squeeze())
         
         # Metrics (in log space)
         y_hat_detached = y_hat.detach().squeeze()
@@ -183,7 +248,13 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         
         mae_val = self.mae_val.compute()
         rmse_val = torch.sqrt(self.rmse_val.compute())
-        r2_val = self.r2_val.compute()
+        
+        # R2Score needs at least 2 samples - check before computing
+        try:
+            r2_val = self.r2_val.compute()
+        except ValueError:
+            # Not enough samples for R2 (e.g., during sanity check with small batches)
+            r2_val = torch.tensor(0.0, device=mae_val.device)
         
         self.log('eval.val.mae', mae_val, on_epoch=True, on_step=False, metric_attribute=self.mae_val)
         self.log('eval.val.rmse', rmse_val, on_epoch=True, on_step=False)
@@ -228,7 +299,13 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         """Compute test metrics"""
         mae_test = self.mae_test.compute()
         rmse_test = torch.sqrt(self.rmse_test.compute())
-        r2_test = self.r2_test.compute()
+        
+        # R2Score needs at least 2 samples - check before computing
+        try:
+            r2_test = self.r2_test.compute()
+        except ValueError:
+            # Not enough samples for R2
+            r2_test = torch.tensor(0.0, device=mae_test.device)
         
         self.log('eval.test.mae', mae_test, metric_attribute=self.mae_test)
         self.log('eval.test.rmse', rmse_test)

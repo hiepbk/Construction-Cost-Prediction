@@ -69,7 +69,7 @@ class SSLOnlineEvaluatorRegression(Callback):
         z_dim: int,
         drop_p: float = 0.2,
         hidden_dim: Optional[int] = None,
-        regression_loss: str = 'huber',  # 'huber', 'mse', 'mae'
+        regression_loss: str = 'huber',  # 'huber', 'mse', 'mae', 'rmsle'
         huber_delta: float = 1.0,
         target_mean: float = 0.0,
         target_std: float = 1.0,
@@ -83,7 +83,7 @@ class SSLOnlineEvaluatorRegression(Callback):
             z_dim: Representation dimension (embedding size)
             drop_p: Dropout probability
             hidden_dim: Hidden dimension for the regression MLP
-            regression_loss: Loss type ('huber', 'mse', 'mae')
+            regression_loss: Loss type ('huber', 'mse', 'mae', 'rmsle')
             huber_delta: Delta parameter for Huber loss
             target_mean: Mean of normalized targets (for denormalization)
             target_std: Std of normalized targets (for denormalization)
@@ -162,21 +162,24 @@ class SSLOnlineEvaluatorRegression(Callback):
             if "optimizer_state" in self._recovered_callback_state:
                 self.optimizer.load_state_dict(self._recovered_callback_state["optimizer_state"])
     
-    def to_device(self, batch: Sequence, device: Union[str, torch.device]) -> Tuple[Tensor, Tensor, Optional[Tensor], Optional[list]]:
+    def to_device(self, batch: Sequence, device: Union[str, torch.device]) -> Tuple[Tensor, Tensor, Optional[Tensor], Optional[Tensor], Optional[list]]:
         """Extract inputs and targets from batch, handling different batch formats.
         
         Returns:
             x: Image input
-            y: Target (if available)
+            y: Target (if available) - normalized log-transformed
             x_t: Tabular input (if available)
+            y_original: Original target in original scale (if available) - for RMSLE loss
             data_ids: List of data_ids for this batch (if available)
         """
         data_ids = None  # Initialize data_ids
+        y_original = None  # Initialize y_original
         if self.swav:
             x, y = batch
             x = x[0]
             x_t = None
             data_ids = None
+            y_original = None
         elif self.multimodal and self.strategy == 'tip':
             # TIP multimodal batch: (imaging_views, tabular_views, labels, unaugmented_image, unaugmented_tabular, target, target_original, data_id)
             # Must have exactly 8 elements
@@ -191,19 +194,23 @@ class SSLOnlineEvaluatorRegression(Callback):
             x = x_orig
             x_t = None
             data_ids = None
+            y_original = None
         else:
             _, x, y = batch
             x_t = None
             data_ids = None
+            y_original = None
         
         x = x.to(device)
         if y is not None:
             y = y.to(device)
         if x_t is not None:
             x_t = x_t.to(device)
+        if y_original is not None:
+            y_original = y_original.to(device)
         # data_ids is a list of strings, no need to move to device
         
-        return x, y, x_t, data_ids
+        return x, y, x_t, y_original, data_ids
     
     
     def shared_step(
@@ -214,11 +221,11 @@ class SSLOnlineEvaluatorRegression(Callback):
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Optional[list]]:
         """
         Shared step for training and validation.
-        Returns: (predictions_normalized, targets_normalized, predictions_denorm, targets_denorm, loss)
+        Returns: (predictions_normalized, targets_normalized, predictions_denorm, targets_denorm, loss, data_ids)
         """
         with torch.no_grad():
             with set_training(pl_module, False):
-                x, y, x_t, data_ids = self.to_device(batch, pl_module.device)
+                x, y, x_t, y_original, data_ids = self.to_device(batch, pl_module.device)
                 
                 # Get representations from frozen encoder
                 if x_t is not None:
@@ -254,14 +261,19 @@ class SSLOnlineEvaluatorRegression(Callback):
             targets_for_loss = targets_normalized
         
         # Calculate loss on normalized predictions
-        if self.regression_loss == 'huber':
+        if self.regression_loss == 'rmsle':
+            # RMSLE loss: use original ground truth directly (not converted back from normalized)
+            if y_original is None:
+                raise ValueError("RMSLE loss requires target_original in batch. Ensure dataset returns target_original in __getitem__.")
+            loss = self._rmsle_loss(predictions_normalized, y_original)
+        elif self.regression_loss == 'huber':
             loss = F.huber_loss(predictions_normalized, targets_for_loss, delta=self.huber_delta)
         elif self.regression_loss == 'mse':
             loss = F.mse_loss(predictions_normalized, targets_for_loss)
         elif self.regression_loss == 'mae':
             loss = F.l1_loss(predictions_normalized, targets_for_loss)
         else:
-            raise ValueError(f"Unknown regression loss: {self.regression_loss}")
+            raise ValueError(f"Unknown regression loss: {self.regression_loss}. Options: 'rmsle', 'huber', 'mse', 'mae'")
         
         # IMPORTANT: Convert predictions to original scale (USD/m²)
         # Step 1: Denormalize (if targets were normalized)
@@ -289,6 +301,46 @@ class SSLOnlineEvaluatorRegression(Callback):
         # This is just for consistency - data_ids should already be set from to_device
         
         return predictions_normalized, targets_normalized, predictions_original_scale, targets_original_scale, loss, data_ids
+    
+    def _rmsle_loss(self, y_pred: torch.Tensor, y_true_original: torch.Tensor) -> torch.Tensor:
+        """
+        RMSLE Loss: sqrt(mean((log1p(y_true_orig) - log1p(y_pred_orig))^2))
+        
+        This directly optimizes the competition metric (RMSLE).
+        
+        IMPORTANT: 
+        - y_pred: Predicted values in normalized log space → convert to original scale
+        - y_true_original: Ground truth in ORIGINAL scale (USD/m²) - use directly, don't convert
+        
+        Args:
+            y_pred: Predicted values (in log-normalized space)
+            y_true_original: True values in ORIGINAL scale (USD/m²) - not normalized, not log-transformed
+        
+        Returns:
+            RMSLE loss (scalar tensor)
+        """
+        # Convert y_pred from normalized log space to original scale
+        # Step 1: Denormalize (reverse normalization)
+        y_pred_log = y_pred * self.target_std + self.target_mean
+        
+        # Step 2: Reverse log-transform to get original scale
+        if self.log_transform_target:
+            y_pred_original = torch.expm1(y_pred_log)  # exp(x) - 1
+        else:
+            y_pred_original = y_pred_log
+        
+        # Ensure non-negative
+        y_pred_original = torch.clamp(y_pred_original, min=0.0)
+        y_true_original = torch.clamp(y_true_original, min=0.0)
+        
+        # Compute RMSLE: sqrt(mean((log1p(y_true_orig) - log1p(y_pred_orig))^2))
+        log_pred = torch.log1p(y_pred_original)  # log(1 + y_pred)
+        log_true = torch.log1p(y_true_original)  # log(1 + y_true) - using original GT directly
+        
+        squared_log_error = (log_true - log_pred) ** 2
+        rmsle = torch.sqrt(torch.mean(squared_log_error))
+        
+        return rmsle
     
     def on_train_batch_end(
         self,

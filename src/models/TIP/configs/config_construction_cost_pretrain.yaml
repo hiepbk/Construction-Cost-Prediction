@@ -126,7 +126,7 @@ generate_embeddings: false  # Set to true to generate embeddings only
 algorithm_name: TIP
 online_mlp: true  # Enable online regression evaluation
 num_classes: 1  # For regression
-regression_loss: huber  # Options: huber, mse, mae
+regression_loss: huber  # Options: rmsle (competition metric), huber (robust to outliers), mse, mae
 huber_delta: 1.0  # Delta parameter for Huber loss
 target_mean: 6.513477  # Mean of log(1 + target) values (computed from training dataset)
 target_std: 1.101045   # Std of log(1 + target) values (computed from training dataset)
