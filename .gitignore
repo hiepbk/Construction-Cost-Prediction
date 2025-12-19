@@ -64,6 +64,9 @@ wandb/
 data/
 pretrained/
 
+# TIP source code (external library)
+src/models/TIP/
+
 # Model checkpoints and large files
 *.pth
 *.pt
