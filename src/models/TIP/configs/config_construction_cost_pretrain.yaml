@@ -76,7 +76,7 @@ pin_memory: true
 # Scheduler
 scheduler: anneal  # Options: cosine, anneal
 warmup_epochs: 10  # Warmup epochs for anneal scheduler
-anneal_max_epochs: 100  # Max epochs for anneal scheduler (usually same as max_epochs)
+anneal_max_epochs: ${max_epochs}  # Max epochs for anneal scheduler (usually same as max_epochs)
 cosine_anneal_mult: 1.0  # Multiplier for cosine scheduler (if using cosine)
 dataset_length: null  # Will be set automatically from dataset size
 
@@ -95,7 +95,7 @@ view: augmented  # View type for contrastive learning
 tr_loss: normal  # Tabular reconstruction loss type
 
 # Image Augmentation
-img_size: 512  # Increased to match SatlasPretrain training size (was 224)
+img_size: 224  # Increased to match SatlasPretrain training size (was 224)
 augmentation_rate: 0.95
 live_loading: false
 augmentation_speedup: true
