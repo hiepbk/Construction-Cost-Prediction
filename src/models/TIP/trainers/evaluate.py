@@ -20,6 +20,7 @@ from models.Evaluator import Evaluator
 from models.Evaluator_regression import Evaluator_Regression
 from utils.utils import grab_arg_from_checkpoint, grab_hard_eval_image_augmentations, grab_wids, create_logdir
 from omegaconf import open_dict
+from sklearn.model_selection import KFold
 
 def load_datasets(hparams):
   # Check if using ConstructionCostTIPDataset
@@ -28,44 +29,131 @@ def load_datasets(hparams):
   if use_construction_cost_dataset and hparams.eval_datatype == 'multimodal':
     # Use ConstructionCostTIPDataset for construction cost fine-tuning
     from datasets.ConstructionCostTIPDataset import ConstructionCostTIPDataset
-    train_dataset = ConstructionCostTIPDataset(
-      csv_path=hparams.data_train_eval_tabular,
-      composite_dir=hparams.composite_dir_trainval,
-      field_lengths_tabular=hparams.field_lengths_tabular,
-      labels_path=hparams.labels_train_eval_imaging,  # Contains targets
-      img_size=grab_arg_from_checkpoint(hparams, 'img_size'),
-      is_train=True,
-      corruption_rate=0.0,  # No corruption during fine-tuning
-      replace_random_rate=0.0,
-      replace_special_rate=0.0,
-      augmentation_rate=hparams.eval_train_augment_rate,
-      one_hot_tabular=hparams.eval_one_hot,
-      use_sentinel2=hparams.use_sentinel2,
-      use_viirs=hparams.use_viirs,
-      live_loading=hparams.live_loading,
-      augmentation_speedup=hparams.augmentation_speedup,
-      target_log_transform=getattr(hparams, 'target_log_transform', True),
-      metadata_path=getattr(hparams, 'train_metadata_path', None)
-    )
-    val_dataset = ConstructionCostTIPDataset(
-      csv_path=hparams.data_val_eval_tabular,
-      composite_dir=hparams.composite_dir_trainval,  # Val split uses trainval_composite (same as train)
-      field_lengths_tabular=hparams.field_lengths_tabular,
-      labels_path=hparams.labels_val_eval_imaging,  # Contains targets
-      img_size=grab_arg_from_checkpoint(hparams, 'img_size'),
-      is_train=False,
-      corruption_rate=0.0,
-      replace_random_rate=0.0,
-      replace_special_rate=0.0,
-      augmentation_rate=0.0,  # No augmentation for validation
-      one_hot_tabular=hparams.eval_one_hot,
-      use_sentinel2=hparams.use_sentinel2,
-      use_viirs=hparams.use_viirs,
-      live_loading=hparams.live_loading,
-      augmentation_speedup=hparams.augmentation_speedup,
-      target_log_transform=getattr(hparams, 'target_log_transform', True),
-      metadata_path=getattr(hparams, 'val_metadata_path', None)
-    )
+    
+    use_kfold = getattr(hparams, 'use_kfold', False)
+    
+    if use_kfold:
+      # K-Fold Cross-Validation: Read from unified trainval.csv and split
+      print("="*60)
+      print("USING K-FOLD CROSS-VALIDATION")
+      print("="*60)
+      
+      # Read unified trainval CSV
+      trainval_csv = getattr(hparams, 'data_trainval_tabular', None)
+      if trainval_csv is None:
+        raise ValueError("data_trainval_tabular must be specified when use_kfold=true")
+      
+      print(f"Reading unified trainval CSV: {trainval_csv}")
+      df_trainval = pd.read_csv(trainval_csv)
+      print(f"Total samples in trainval: {len(df_trainval)}")
+      
+      # Get k-fold parameters
+      k_fold = getattr(hparams, 'k_fold', 5)
+      k_fold_seed = getattr(hparams, 'k_fold_seed', 42)
+      k_fold_current = getattr(hparams, 'k_fold_current', 0)
+      
+      if k_fold_current < 0 or k_fold_current >= k_fold:
+        raise ValueError(f"k_fold_current must be between 0 and {k_fold-1}, got {k_fold_current}")
+      
+      print(f"K-Fold parameters: k={k_fold}, seed={k_fold_seed}, current_fold={k_fold_current}")
+      
+      # Create k-fold splitter
+      kf = KFold(n_splits=k_fold, shuffle=True, random_state=k_fold_seed)
+      
+      # Get indices for current fold
+      indices = np.arange(len(df_trainval))
+      train_indices, val_indices = list(kf.split(indices))[k_fold_current]
+      
+      # Split dataframe
+      df_train = df_trainval.iloc[train_indices].reset_index(drop=True)
+      df_val = df_trainval.iloc[val_indices].reset_index(drop=True)
+      
+      print(f"Fold {k_fold_current}: Train={len(df_train)} samples, Val={len(df_val)} samples")
+      
+      # Use trainval metadata (same for both train and val since they come from same source)
+      trainval_metadata = getattr(hparams, 'trainval_metadata_path', None)
+      
+      # Pass DataFrames directly to dataset (no need to create CSV files)
+      train_dataset = ConstructionCostTIPDataset(
+        csv_path=df_train,  # Pass DataFrame directly
+        composite_dir=hparams.composite_dir_trainval,
+        field_lengths_tabular=hparams.field_lengths_tabular,
+        labels_path=hparams.labels_train_eval_imaging,
+        img_size=grab_arg_from_checkpoint(hparams, 'img_size'),
+        is_train=True,
+        corruption_rate=0.0,
+        replace_random_rate=0.0,
+        replace_special_rate=0.0,
+        augmentation_rate=hparams.eval_train_augment_rate,
+        one_hot_tabular=hparams.eval_one_hot,
+        use_sentinel2=hparams.use_sentinel2,
+        use_viirs=hparams.use_viirs,
+        live_loading=hparams.live_loading,
+        augmentation_speedup=hparams.augmentation_speedup,
+        target_log_transform=getattr(hparams, 'target_log_transform', True),
+        metadata_path=trainval_metadata  # Use trainval metadata for both
+      )
+      val_dataset = ConstructionCostTIPDataset(
+        csv_path=df_val,  # Pass DataFrame directly
+        composite_dir=hparams.composite_dir_trainval,
+        field_lengths_tabular=hparams.field_lengths_tabular,
+        labels_path=hparams.labels_val_eval_imaging,
+        img_size=grab_arg_from_checkpoint(hparams, 'img_size'),
+        is_train=False,
+        corruption_rate=0.0,
+        replace_random_rate=0.0,
+        replace_special_rate=0.0,
+        augmentation_rate=0.0,
+        one_hot_tabular=hparams.eval_one_hot,
+        use_sentinel2=hparams.use_sentinel2,
+        use_viirs=hparams.use_viirs,
+        live_loading=hparams.live_loading,
+        augmentation_speedup=hparams.augmentation_speedup,
+        target_log_transform=getattr(hparams, 'target_log_transform', True),
+        metadata_path=trainval_metadata  # Use trainval metadata for both
+      )
+      print("="*60)
+    else:
+      # Fixed Split: Use separate train/val CSV files (existing behavior)
+      train_dataset = ConstructionCostTIPDataset(
+        csv_path=hparams.data_train_eval_tabular,
+        composite_dir=hparams.composite_dir_trainval,
+        field_lengths_tabular=hparams.field_lengths_tabular,
+        labels_path=hparams.labels_train_eval_imaging,  # Contains targets
+        img_size=grab_arg_from_checkpoint(hparams, 'img_size'),
+        is_train=True,
+        corruption_rate=0.0,  # No corruption during fine-tuning
+        replace_random_rate=0.0,
+        replace_special_rate=0.0,
+        augmentation_rate=hparams.eval_train_augment_rate,
+        one_hot_tabular=hparams.eval_one_hot,
+        use_sentinel2=hparams.use_sentinel2,
+        use_viirs=hparams.use_viirs,
+        live_loading=hparams.live_loading,
+        augmentation_speedup=hparams.augmentation_speedup,
+        target_log_transform=getattr(hparams, 'target_log_transform', True),
+        metadata_path=getattr(hparams, 'train_metadata_path', None)
+      )
+      val_dataset = ConstructionCostTIPDataset(
+        csv_path=hparams.data_val_eval_tabular,
+        composite_dir=hparams.composite_dir_trainval,  # Val split uses trainval_composite (same as train)
+        field_lengths_tabular=hparams.field_lengths_tabular,
+        labels_path=hparams.labels_val_eval_imaging,  # Contains targets
+        img_size=grab_arg_from_checkpoint(hparams, 'img_size'),
+        is_train=False,
+        corruption_rate=0.0,
+        replace_random_rate=0.0,
+        replace_special_rate=0.0,
+        augmentation_rate=0.0,  # No augmentation for validation
+        one_hot_tabular=hparams.eval_one_hot,
+        use_sentinel2=hparams.use_sentinel2,
+        use_viirs=hparams.use_viirs,
+        live_loading=hparams.live_loading,
+        augmentation_speedup=hparams.augmentation_speedup,
+        target_log_transform=getattr(hparams, 'target_log_transform', True),
+        metadata_path=getattr(hparams, 'val_metadata_path', None)
+      )
+    
     with open_dict(hparams):
       hparams.input_size = train_dataset.get_input_size()
   elif hparams.eval_datatype=='imaging':
@@ -181,7 +269,11 @@ def evaluate(hparams, wandb_logger):
   else:
     model = Evaluator(hparams)
   
-  mode = 'max'
+  # Determine mode based on metric (lower is better for rmsle, mae, rmse)
+  if hparams.eval_metric in ['rmsle', 'mae', 'rmse']:
+    mode = 'min'  # Lower is better
+  else:
+    mode = 'min'  # Default to min (lower is better)
   
   callbacks = []
   callbacks.append(ModelCheckpoint(monitor=f'eval.val.{hparams.eval_metric}', mode=mode, filename=f'checkpoint_best_{hparams.eval_metric}', dirpath=logdir))
@@ -195,7 +287,20 @@ def evaluate(hparams, wandb_logger):
   eval_df = pd.DataFrame(trainer.callback_metrics, index=[0])
   eval_df.to_csv(join(logdir, 'eval_results.csv'), index=False)
   
-  wandb_logger.log_metrics({f'best.val.{hparams.eval_metric}': model.best_val_score})
+  # Log best validation score (handle case where it might not be set)
+  best_score = getattr(model, 'best_val_score', None)
+  if best_score is None:
+    # Fallback: try to get the metric-specific best value
+    if hparams.eval_metric == 'mae':
+      best_score = getattr(model, 'best_val_mae', float('inf'))
+    elif hparams.eval_metric == 'rmse':
+      best_score = getattr(model, 'best_val_rmse', float('inf'))
+    elif hparams.eval_metric == 'rmsle':
+      best_score = getattr(model, 'best_val_rmsle', float('inf'))
+    else:
+      best_score = getattr(model, 'best_val_mae', float('inf'))
+  
+  wandb_logger.log_metrics({f'best.val.{hparams.eval_metric}': best_score})
 
 
   if hparams.test_and_eval:

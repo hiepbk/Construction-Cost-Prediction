@@ -64,7 +64,7 @@ class ConstructionCostTIPDataset(Dataset):
     
     def __init__(
         self,
-        csv_path: str,
+        csv_path,  # Can be str (path to CSV) or pd.DataFrame
         composite_dir: str,
         field_lengths_tabular: str,  # Path to .pt file with field lengths
         labels_path: str = None,  # Path to .pt file with labels (for pretraining, can be None)
@@ -84,7 +84,7 @@ class ConstructionCostTIPDataset(Dataset):
     ):
         """
         Args:
-            csv_path: Path to CSV with tabular data and file paths
+            csv_path: Path to CSV with tabular data and file paths, OR a pandas DataFrame
             composite_dir: Directory containing satellite TIFF files
             field_lengths_tabular: Path to .pt file with field lengths (for TIP tabular encoder)
             labels_path: Path to .pt file with labels (for pretraining contrastive learning)
@@ -133,8 +133,15 @@ class ConstructionCostTIPDataset(Dataset):
                 print(f"   This might indicate the wrong directory was specified.")
                 print(f"   Expected paths: data/trainval_composite (for train/val) or data/test_composite (for test)")
         
-        # Load CSV
-        self.df = pd.read_csv(csv_path)
+        # Load CSV or use provided DataFrame
+        if isinstance(csv_path, pd.DataFrame):
+            self.df = csv_path.copy()  # Make a copy to avoid modifying original
+            self.csv_path_str = None  # No file path when using DataFrame
+        elif isinstance(csv_path, str):
+            self.df = pd.read_csv(csv_path)
+            self.csv_path_str = csv_path
+        else:
+            raise TypeError(f"csv_path must be a string (CSV path) or pandas DataFrame, got {type(csv_path)}")
         
         # Load field lengths (required by TIP tabular encoder)
         if isinstance(field_lengths_tabular, str):
@@ -202,8 +209,12 @@ class ConstructionCostTIPDataset(Dataset):
         if self.metadata_path and os.path.exists(self.metadata_path):
             metadata_path = self.metadata_path
         else:
-            # Fallback: try to infer from csv_path
-            metadata_path = self.csv_path.replace('.csv', '_metadata.pkl')
+            # Fallback: try to infer from csv_path (only if it's a string path)
+            if self.csv_path_str:
+                metadata_path = self.csv_path_str.replace('.csv', '_metadata.pkl')
+            else:
+                # If using DataFrame, metadata_path must be explicitly provided
+                metadata_path = None
         
         if os.path.exists(metadata_path):
             import pickle

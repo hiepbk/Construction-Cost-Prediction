@@ -66,10 +66,6 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         self.rmsle_val = torchmetrics.MeanSquaredError()
         self.rmsle_test = torchmetrics.MeanSquaredError()
         
-        self.r2_train = torchmetrics.R2Score()
-        self.r2_val = torchmetrics.R2Score()
-        self.r2_test = torchmetrics.R2Score()
-        
         # Track predictions for WandB logging (like pretraining)
         self.tracked_val_preds = {}  # Dict: {data_id: prediction_value}
         self.tracked_val_targets = {}  # Dict: {data_id: target_value}
@@ -81,6 +77,8 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         
         self.best_val_mae = float('inf')
         self.best_val_rmse = float('inf')
+        self.best_val_rmsle = float('inf')
+        self.best_val_score = float('inf')  # For compatibility with evaluate.py (will be set based on eval_metric)
         
         print(f"Initialized Evaluator_ConstructionCost")
         print(f"  Loss: {loss_type}")
@@ -212,20 +210,14 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         log_true = torch.log1p(y_true_original)
         self.rmsle_train(log_pred, log_true)
         
-        # R2Score may fail if not enough samples - log safely
-        try:
-            self.r2_train(y_hat_original, y_true_original)
-            r2_train_val = self.r2_train.compute()
-        except ValueError:
-            r2_train_val = torch.tensor(0.0, device=y_hat_original.device)
-        
-        self.log('eval.train.loss', loss, on_epoch=True, on_step=False, sync_dist=True)
-        self.log('eval.train.mae', self.mae_train, on_epoch=True, on_step=False, sync_dist=True)
-        self.log('eval.train.rmse', torch.sqrt(self.rmse_train.compute()), on_epoch=True, on_step=False, sync_dist=True)
-        self.log('eval.train.rmsle', torch.sqrt(self.rmsle_train.compute()), on_epoch=True, on_step=False, sync_dist=True)
-        self.log('eval.train.r2', r2_train_val, on_epoch=True, on_step=False, sync_dist=True)
+        # Log metrics (only compute when needed, avoid warnings)
+        batch_size = y_hat_original.shape[0] if len(y_hat_original.shape) > 0 else 1
+        self.log('eval.train.loss', loss, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        self.log('eval.train.mae', self.mae_train, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        self.log('eval.train.rmse', torch.sqrt(self.rmse_train.compute()), on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        self.log('eval.train.rmsle', torch.sqrt(self.rmsle_train.compute()), on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
         # Primary metric for progress bar
-        self.log('train_rmsle', torch.sqrt(self.rmsle_train.compute()), on_epoch=True, on_step=False, prog_bar=True, logger=False, sync_dist=True)
+        self.log('train_rmsle', torch.sqrt(self.rmsle_train.compute()), on_epoch=True, on_step=False, prog_bar=True, logger=False, sync_dist=True, batch_size=batch_size)
         
         return loss
     
@@ -234,7 +226,6 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         self.mae_train.reset()
         self.rmse_train.reset()
         self.rmsle_train.reset()
-        self.r2_train.reset()
     
     def validation_step(self, batch: Tuple, _) -> None:
         """Validation step"""
@@ -288,12 +279,6 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         log_true = torch.log1p(y_true_original)
         self.rmsle_val(log_pred, log_true)
         
-        # R2Score may fail if not enough samples
-        try:
-            self.r2_val(y_hat_original, y_true_original)
-        except ValueError:
-            pass  # Skip R2 if not enough samples
-        
         self.log('eval.val.loss', loss, on_epoch=True, on_step=False, sync_dist=True)
     
     def on_validation_epoch_start(self) -> None:
@@ -310,20 +295,18 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         rmse_val = torch.sqrt(self.rmse_val.compute())
         rmsle_val = torch.sqrt(self.rmsle_val.compute())  # Primary metric
         
-        # R2Score needs at least 2 samples - check before computing
+        # Get batch size from metrics (approximate) - use update count if available
         try:
-            r2_val = self.r2_val.compute()
-        except ValueError:
-            # Not enough samples for R2 (e.g., during sanity check with small batches)
-            r2_val = torch.tensor(0.0, device=mae_val.device)
+            batch_size = self.mae_val._update_count if hasattr(self.mae_val, '_update_count') else 1
+        except:
+            batch_size = 1
         
         # Log metrics (like pretraining)
-        self.log('eval.val.mae', mae_val, on_epoch=True, on_step=False, sync_dist=True, metric_attribute=self.mae_val)
-        self.log('eval.val.rmse', rmse_val, on_epoch=True, on_step=False, sync_dist=True)
-        self.log('eval.val.rmsle', rmsle_val, on_epoch=True, on_step=False, sync_dist=True)  # Primary metric
-        self.log('eval.val.r2', r2_val, on_epoch=True, on_step=False, sync_dist=True, metric_attribute=self.r2_val)
+        self.log('eval.val.mae', mae_val, on_epoch=True, on_step=False, sync_dist=True, metric_attribute=self.mae_val, batch_size=batch_size)
+        self.log('eval.val.rmse', rmse_val, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        self.log('eval.val.rmsle', rmsle_val, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)  # Primary metric
         # Primary metric for progress bar
-        self.log('val_rmsle', rmsle_val, on_epoch=True, on_step=False, prog_bar=True, logger=False, sync_dist=True)
+        self.log('val_rmsle', rmsle_val, on_epoch=True, on_step=False, prog_bar=True, logger=False, sync_dist=True, batch_size=batch_size)
         
         # Log ALL tracked sample predictions with data_id to WandB (like pretraining)
         if len(self.tracked_val_preds) > 0:
@@ -345,12 +328,25 @@ class Evaluator_ConstructionCost(pl.LightningModule):
             self.best_val_mae = mae_val
         if rmse_val < self.best_val_rmse:
             self.best_val_rmse = rmse_val
+        if rmsle_val < self.best_val_rmsle:
+            self.best_val_rmsle = rmsle_val
+        
+        # Set best_val_score based on eval_metric (for compatibility with evaluate.py)
+        eval_metric = getattr(self.hparams, 'eval_metric', 'mae')
+        if eval_metric == 'mae':
+            self.best_val_score = self.best_val_mae
+        elif eval_metric == 'rmse':
+            self.best_val_score = self.best_val_rmse
+        elif eval_metric == 'rmsle':
+            self.best_val_score = self.best_val_rmsle
+        else:
+            # Default to MAE
+            self.best_val_score = self.best_val_mae
         
         # Reset metrics and tracking for next epoch
         self.mae_val.reset()
         self.rmse_val.reset()
         self.rmsle_val.reset()
-        self.r2_val.reset()
         self.tracked_val_preds = {}
         self.tracked_val_targets = {}
     
@@ -377,23 +373,14 @@ class Evaluator_ConstructionCost(pl.LightningModule):
             
             self.mae_test(y_hat_detached, y_detached)
             self.rmse_test(y_hat_detached, y_detached)
-            self.r2_test(y_hat_detached, y_detached)
     
     def test_epoch_end(self, _) -> None:
         """Compute test metrics"""
         mae_test = self.mae_test.compute()
         rmse_test = torch.sqrt(self.rmse_test.compute())
         
-        # R2Score needs at least 2 samples - check before computing
-        try:
-            r2_test = self.r2_test.compute()
-        except ValueError:
-            # Not enough samples for R2
-            r2_test = torch.tensor(0.0, device=mae_test.device)
-        
         self.log('eval.test.mae', mae_test, metric_attribute=self.mae_test)
         self.log('eval.test.rmse', rmse_test)
-        self.log('eval.test.r2', r2_test, metric_attribute=self.r2_test)
     
     def configure_optimizers(self):
         """

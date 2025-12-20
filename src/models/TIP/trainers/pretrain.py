@@ -4,6 +4,10 @@ import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from omegaconf import open_dict
+import os
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import KFold
 
 from utils.utils import create_logdir
 from utils.ssl_online_custom import SSLOnlineEvaluator
@@ -23,8 +27,65 @@ from models.Tips.TipModel3Loss import TIP3Loss
 
 def load_datasets(hparams):
   """Load ConstructionCostTIPDataset for train and validation."""
+  
+  use_kfold = getattr(hparams, 'use_kfold', False)
+  
+  if use_kfold:
+    # K-Fold Cross-Validation: Read from unified trainval.csv and split
+    print("="*60)
+    print("USING K-FOLD CROSS-VALIDATION (PRETRAINING)")
+    print("="*60)
+    
+    # Read unified trainval CSV
+    trainval_csv = getattr(hparams, 'data_trainval_tabular', None)
+    if trainval_csv is None:
+      raise ValueError("data_trainval_tabular must be specified when use_kfold=true")
+    
+    print(f"Reading unified trainval CSV: {trainval_csv}")
+    df_trainval = pd.read_csv(trainval_csv)
+    print(f"Total samples in trainval: {len(df_trainval)}")
+    
+    # Get k-fold parameters
+    k_fold = getattr(hparams, 'k_fold', 5)
+    k_fold_seed = getattr(hparams, 'k_fold_seed', 42)
+    k_fold_current = getattr(hparams, 'k_fold_current', 0)
+    
+    if k_fold_current < 0 or k_fold_current >= k_fold:
+      raise ValueError(f"k_fold_current must be between 0 and {k_fold-1}, got {k_fold_current}")
+    
+    print(f"K-Fold parameters: k={k_fold}, seed={k_fold_seed}, current_fold={k_fold_current}")
+    
+    # Create k-fold splitter
+    kf = KFold(n_splits=k_fold, shuffle=True, random_state=k_fold_seed)
+    
+    # Get indices for current fold
+    indices = np.arange(len(df_trainval))
+    train_indices, val_indices = list(kf.split(indices))[k_fold_current]
+    
+    # Split dataframe
+    df_train = df_trainval.iloc[train_indices].reset_index(drop=True)
+    df_val = df_trainval.iloc[val_indices].reset_index(drop=True)
+    
+    print(f"Fold {k_fold_current}: Train={len(df_train)} samples, Val={len(df_val)} samples")
+    
+    # Use trainval metadata (same for both train and val since they come from same source)
+    trainval_metadata = getattr(hparams, 'trainval_metadata_path', None)
+    
+    # Pass DataFrames directly to dataset (no need to create CSV files)
+    train_csv_path = df_train  # Pass DataFrame directly
+    val_csv_path = df_val  # Pass DataFrame directly
+    train_metadata_path = trainval_metadata
+    val_metadata_path = trainval_metadata
+    print("="*60)
+  else:
+    # Fixed Split: Use separate train/val CSV files (existing behavior)
+    train_csv_path = hparams.data_train_tabular
+    val_csv_path = hparams.data_val_tabular
+    train_metadata_path = getattr(hparams, 'train_metadata_path', None)
+    val_metadata_path = getattr(hparams, 'val_metadata_path', None)
+  
   train_dataset = ConstructionCostTIPDataset(
-    csv_path=hparams.data_train_tabular,
+    csv_path=train_csv_path,
     composite_dir=hparams.composite_dir_trainval,
     field_lengths_tabular=hparams.field_lengths_tabular,
     labels_path=hparams.labels_train,
@@ -40,10 +101,10 @@ def load_datasets(hparams):
     live_loading=hparams.live_loading,
     augmentation_speedup=hparams.augmentation_speedup,
     target_log_transform=getattr(hparams, 'target_log_transform', True),
-    metadata_path=getattr(hparams, 'train_metadata_path', None)
+    metadata_path=train_metadata_path
   )
   val_dataset = ConstructionCostTIPDataset(
-    csv_path=hparams.data_val_tabular,
+    csv_path=val_csv_path,
     composite_dir=hparams.composite_dir_trainval,
     field_lengths_tabular=hparams.field_lengths_tabular,
     labels_path=hparams.labels_val,
@@ -59,7 +120,7 @@ def load_datasets(hparams):
     live_loading=hparams.live_loading,
     augmentation_speedup=hparams.augmentation_speedup,
     target_log_transform=getattr(hparams, 'target_log_transform', True),
-    metadata_path=getattr(hparams, 'val_metadata_path', None)
+    metadata_path=val_metadata_path
   )
   with open_dict(hparams):
     hparams.input_size = train_dataset.get_input_size()

@@ -19,13 +19,25 @@ use_construction_cost_dataset: true
 data_base: /hdd/hiep/CODE/Construction_Cost_Prediction
 
 # Data paths (absolute paths)
+
+# K-Fold Cross-Validation Options
+use_kfold: false  # If true, use k-fold CV from unified trainval.csv; if false, use fixed train/val splits
+k_fold: 5  # Number of folds (only used if use_kfold=true)
+k_fold_seed: 42  # Random seed for k-fold splitting (only used if use_kfold=true)
+k_fold_current: 0  # Current fold to use (0-indexed, 0 to k_fold-1) (only used if use_kfold=true)
+data_trainval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/trainval_tabular.csv  # Unified trainval CSV (only used if use_kfold=true)
+
+# Fixed Split Options (only used if use_kfold=false)
 data_train_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean.csv
 data_val_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean.csv
+train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean_metadata.pkl
+val_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean_metadata.pkl
+
+# Common paths (used for both k-fold and fixed split)
 composite_dir_trainval: /hdd/hiep/CODE/Construction_Cost_Prediction/data/trainval_composite  # For train and val sets
 composite_dir_test: /hdd/hiep/CODE/Construction_Cost_Prediction/data/test_composite  # For test set
 field_lengths_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/field_lengths.pt
-train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean_metadata.pkl
-val_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean_metadata.pkl
+trainval_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval_metadata.pkl  # Metadata for unified trainval (used if use_kfold=true)
 labels_train: null  # Will be auto-generated
 labels_val: null    # Will be auto-generated
 
