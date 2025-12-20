@@ -18,14 +18,20 @@ class TIPBackbone(nn.Module):
   """
   Evaluation model for TIP.
   """
-  def __init__(self, args) -> None:
+  def __init__(self, args, checkpoint_dict=None) -> None:
     super(TIPBackbone, self).__init__()
     self.missing_tabular = args.missing_tabular
     print(f'Current missing tabular for TIPBackbone: {self.missing_tabular}')
-    if args.checkpoint:
-      print(f'Checkpoint name: {args.checkpoint}')
-      # Load weights
-      checkpoint = torch.load(args.checkpoint)
+    if args.checkpoint or checkpoint_dict:
+      if checkpoint_dict:
+        # Use preprocessed checkpoint dict (from ConstructionCostPrediction)
+        print(f'Using preprocessed checkpoint dict')
+        checkpoint = checkpoint_dict
+      else:
+        # Load from file path
+        print(f'Checkpoint name: {args.checkpoint}')
+        checkpoint = torch.load(args.checkpoint)
+      
       original_args = OmegaConf.create(checkpoint['hyper_parameters'])
       original_args.field_lengths_tabular = args.field_lengths_tabular
       state_dict = checkpoint['state_dict']

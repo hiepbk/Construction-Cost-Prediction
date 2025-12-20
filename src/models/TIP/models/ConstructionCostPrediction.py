@@ -32,32 +32,72 @@ class ConstructionCostPrediction(nn.Module):
     
     Args:
         hparams: Hyperparameters (from checkpoint or config)
-        checkpoint_path: Path to checkpoint file (for loading weights)
-        field_lengths_path: Path to field_lengths.pt file
+                   - hparams.checkpoint: Path to checkpoint file (for loading weights)
+                   - hparams.field_lengths_tabular: Path to field_lengths.pt file
     """
-    def __init__(self, hparams, checkpoint_path: str = None, field_lengths_path: str = None):
+    def __init__(self, hparams):
         super().__init__()
         
-        # Store checkpoint path for loading weights
+        # Extract paths from hparams
+        checkpoint_path = getattr(hparams, 'checkpoint', None)
+        field_lengths_path = getattr(hparams, 'field_lengths_tabular', None)
+        
+        # Store checkpoint path
         self.checkpoint_path = checkpoint_path
         
         # Load checkpoint if provided
         checkpoint = None
+        preprocessed_checkpoint = None
+        is_finetune_checkpoint = False
+        
         if checkpoint_path:
             print(f"Loading checkpoint from: {checkpoint_path}")
             checkpoint = torch.load(checkpoint_path, map_location='cpu')
             checkpoint_hparams = OmegaConf.create(checkpoint['hyper_parameters'])
             
-            # Merge checkpoint hyperparameters with provided hparams
+            # Merge architecture params from checkpoint into hparams (if missing)
+            # This is needed when loading checkpoint directly (e.g., in evaluate_construction_cost.py)
+            # In finetune.py, this merge is already done, so this is a no-op in that case
             with open_dict(hparams):
-                # Copy architecture params from checkpoint if not in hparams
-                if hasattr(checkpoint_hparams, 'multimodal_embedding_dim') and not hasattr(hparams, 'multimodal_embedding_dim'):
-                    hparams.multimodal_embedding_dim = checkpoint_hparams.multimodal_embedding_dim
-                if hasattr(checkpoint_hparams, 'embedding_dim') and not hasattr(hparams, 'embedding_dim'):
-                    hparams.embedding_dim = checkpoint_hparams.embedding_dim
-                if hasattr(checkpoint_hparams, 'model') and not hasattr(hparams, 'model'):
-                    hparams.model = checkpoint_hparams.model
-                # ... add more if needed
+                checkpoint_dict = OmegaConf.to_container(checkpoint_hparams, resolve=True)
+                finetune_dict = OmegaConf.to_container(hparams, resolve=True)
+                
+                # Copy only missing keys from checkpoint (hparams takes precedence)
+                for key, value in checkpoint_dict.items():
+                    if key == 'checkpoint':
+                        continue  # Skip checkpoint path
+                    if key not in finetune_dict:
+                        setattr(hparams, key, value)
+            
+            # Detect checkpoint type by checking state_dict structure:
+            # - Fine-tuning checkpoints: have 'model.backbone.' or 'model.classifier.' prefixes (saved from LightningModule)
+            # - Pretraining checkpoints: have direct keys like 'encoder_imaging.xxx' (saved from regular nn.Module)
+            # Also check if checkpoint was saved during fine-tuning (checkpoint_hparams.finetune=True)
+            state_dict = checkpoint['state_dict']
+            has_model_prefix = any(key.startswith('model.') for key in state_dict.keys())
+            checkpoint_is_finetune = getattr(checkpoint_hparams, 'finetune', False)
+            is_finetune_checkpoint = has_model_prefix or checkpoint_is_finetune
+            
+            if is_finetune_checkpoint:
+                # Fine-tuning checkpoint: Preprocess state_dict to strip 'model.backbone.' prefix
+                print("✅ Detected fine-tuning checkpoint (saved from previous fine-tuning)")
+                print("   Preprocessing state_dict keys to match TIPBackbone structure...")
+                
+                preprocessed_state_dict = {}
+                for key, value in checkpoint['state_dict'].items():
+                    if key.startswith('model.backbone.'):
+                        new_key = key[15:]  # Remove 'model.backbone.'
+                        # Skip classifier keys - they will be loaded separately
+                        if not new_key.startswith('classifier.'):
+                            preprocessed_state_dict[new_key] = value
+                    # Skip 'model.classifier.' keys (will be loaded separately)
+                
+                preprocessed_checkpoint = {
+                    'hyper_parameters': checkpoint['hyper_parameters'],
+                    'state_dict': preprocessed_state_dict
+                }
+            else:
+                print("✅ Detected pretraining checkpoint (loading weights and architecture)")
         
         # Set required attributes for TIPBackbone
         with open_dict(hparams):
@@ -70,80 +110,40 @@ class ConstructionCostPrediction(nn.Module):
             if not hasattr(hparams, 'task'):
                 hparams.task = 'regression'
             if not hasattr(hparams, 'num_classes'):
-                hparams.num_classes = 1  # Regression: single output
-        
-        # Create TIPBackbone (will have default Linear classifier)
-        # Detection logic:
-        # - If checkpoint_path is provided AND hparams has 'pretrain_checkpoint_path', 
-        #   it means we're fine-tuning FROM a pretraining checkpoint (current case).
-        #   We should pass the checkpoint to TIPBackbone so it loads the weights.
-        # - If checkpoint_path is provided but NO 'pretrain_checkpoint_path',
-        #   it's a pretraining checkpoint being loaded directly.
-        # - If checkpoint_path is a fine-tuning checkpoint (saved during fine-tuning),
-        #   it would have all architecture params in hparams already.
-        
-        if checkpoint_path:
-            # Check if this is a fine-tuning checkpoint (saved during fine-tuning)
-            # by checking if checkpoint_path points to a fine-tuning run directory
-            is_finetune_checkpoint = 'finetune' in str(checkpoint_path) and not hasattr(hparams, 'pretrain_checkpoint_path')
+                hparams.num_classes = 1
             
-            if is_finetune_checkpoint:
-                # Fine-tuning checkpoint: has all architecture params, create from args
-                print("✅ Detected fine-tuning checkpoint (saved from previous fine-tuning)")
-                with open_dict(hparams):
-                    hparams.checkpoint = None  # Don't load from checkpoint, create from args
-            else:
-                # Pretraining checkpoint: needs to load architecture and weights from checkpoint
-                print("✅ Detected pretraining checkpoint (loading weights and architecture)")
-                with open_dict(hparams):
-                    hparams.checkpoint = checkpoint_path
-                    print(f"✅ Pretraining checkpoint: {hparams.checkpoint}")
-        else:
-            # No checkpoint: create new model from args
-            print("✅ No checkpoint provided, creating new model from args")
-            with open_dict(hparams):
-                hparams.checkpoint = None
+            # Set checkpoint path for TIPBackbone (always set so it uses if args.checkpoint: block)
+            hparams.checkpoint = checkpoint_path if checkpoint_path else None
         
-        self.backbone = TIPBackbone(hparams)
+        # Create TIPBackbone (always uses if args.checkpoint: block)
+        # If fine-tuning checkpoint, pass preprocessed_checkpoint dict
+        self.backbone = TIPBackbone(hparams, checkpoint_dict=preprocessed_checkpoint)
         
-        # Load weights and head from checkpoint
+        # Load head from checkpoint (backbone already loaded by TIPBackbone)
         if checkpoint:
-            self._load_weights_and_head_from_checkpoint(checkpoint, hparams, is_finetune_checkpoint)
+            self._load_head_from_checkpoint(checkpoint, hparams, is_finetune_checkpoint)
         else:
             # No checkpoint: create head from hparams
             self._create_head_from_hparams(hparams)
     
-    def _load_weights_and_head_from_checkpoint(self, checkpoint, hparams, is_finetune_checkpoint):
-        """Load backbone weights and head from checkpoint (either from state_dict or callback state)."""
+    def _load_head_from_checkpoint(self, checkpoint, hparams, is_finetune_checkpoint):
+        """Load head from checkpoint (backbone already loaded by TIPBackbone)."""
         if is_finetune_checkpoint:
-            # Fine-tuning checkpoint: Load all weights from state_dict (with 'model.' prefix)
-            print("Loading model weights from fine-tuning checkpoint state_dict...")
+            # Fine-tuning checkpoint: Extract head weights from state_dict
+            print("Loading head weights from fine-tuning checkpoint state_dict...")
             state_dict = checkpoint['state_dict']
             
-            # Strip 'model.' prefix to match TIPBackbone structure
-            backbone_state_dict = {}
+            # Extract classifier weights (with 'model.backbone.classifier.' prefix)
             classifier_state_dict = {}
             for key, value in state_dict.items():
-                if key.startswith('model.'):
-                    new_key = key[6:]  # Remove 'model.'
-                    if new_key.startswith('classifier.'):
-                        # Extract classifier weights separately
-                        classifier_key = new_key[11:]  # Remove 'classifier.'
-                        classifier_state_dict[classifier_key] = value
-                    else:
-                        # Backbone weights (encoders, etc.)
-                        backbone_state_dict[new_key] = value
+                if key.startswith('model.backbone.classifier.'):
+                    classifier_key = key[26:]  # Remove 'model.backbone.classifier.'
+                    classifier_state_dict[classifier_key] = value
+                elif key.startswith('model.classifier.'):
+                    # Fallback: some checkpoints might have 'model.classifier.' directly
+                    classifier_key = key[17:]  # Remove 'model.classifier.'
+                    classifier_state_dict[classifier_key] = value
             
-            # Load backbone weights (encoders)
-            if backbone_state_dict:
-                missing_keys, unexpected_keys = self.backbone.load_state_dict(backbone_state_dict, strict=False)
-                if missing_keys:
-                    print(f"⚠️  Warning: Missing keys when loading backbone: {missing_keys}")
-                if unexpected_keys:
-                    print(f"⚠️  Warning: Unexpected keys when loading backbone: {unexpected_keys}")
-                print("✅ Loaded backbone weights from fine-tuning checkpoint")
-            
-            # Load head
             if classifier_state_dict:
                 # Get head class from checkpoint hyperparameters
                 regression_head_class = getattr(hparams, 'regression_head_class', 'RegressionMLP')

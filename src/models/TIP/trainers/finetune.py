@@ -181,12 +181,9 @@ def finetune(hparams, wandb_logger):
             if not hasattr(hparams, key) or key not in hparams:
                 setattr(hparams, key, value)
         
-        # Store original pretraining checkpoint path (for reference, not for loading)
-        hparams.pretrain_checkpoint_path = hparams.checkpoint
-        
-        # Set checkpoint to pretraining checkpoint for TIPBackbone to load weights
-        # TIPBackbone will use this to load pretrained backbone weights
-        hparams.checkpoint = hparams.pretrain_checkpoint_path
+        # Store original pretraining checkpoint path for reference (optional, for logging/debugging)
+        # hparams.checkpoint already points to the pretraining checkpoint, so TIPBackbone can use it directly
+        # No need to set hparams.checkpoint again - it's already correct
     
     print("✅ Merged architecture hyperparameters from pretraining checkpoint")
     print(f"   multimodal_embedding_dim: {hparams.multimodal_embedding_dim}")

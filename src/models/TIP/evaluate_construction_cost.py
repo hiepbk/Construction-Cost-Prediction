@@ -358,13 +358,12 @@ def main():
             hparams.algorithm_name = 'tip'
         if not hasattr(hparams, 'missing_tabular'):
             hparams.missing_tabular = False
+        # Set checkpoint and field_lengths paths from command line args
+        hparams.checkpoint = args.checkpoint
+        hparams.field_lengths_tabular = args.field_lengths
     
     # Create ConstructionCostPrediction model (handles all head loading logic)
-    model = ConstructionCostPrediction(
-        hparams=hparams,
-        checkpoint_path=args.checkpoint,
-        field_lengths_path=args.field_lengths
-    )
+    model = ConstructionCostPrediction(hparams=hparams)
     
     # Freeze backbone if requested
     if args.freeze_backbone:

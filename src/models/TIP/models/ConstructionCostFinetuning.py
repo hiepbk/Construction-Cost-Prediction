@@ -34,15 +34,8 @@ class ConstructionCostFinetuning(pl.LightningModule):
         
 
         
-        # Get checkpoint path from hparams (set during fine-tuning)
-        checkpoint_path = getattr(hparams, 'checkpoint', None)
-        field_lengths_path = getattr(hparams, 'field_lengths_tabular', None)
-        
-        self.model = ConstructionCostPrediction(
-            hparams=hparams,
-            checkpoint_path=checkpoint_path,
-            field_lengths_path=field_lengths_path
-        )
+        # Pass hparams directly (it already contains checkpoint and field_lengths_tabular)
+        self.model = ConstructionCostPrediction(hparams=hparams)
         
         regression_head_class = getattr(hparams, 'regression_head_class', 'RegressionMLP')
         print(f"✅ ConstructionCostPrediction model created with head: {regression_head_class}")
