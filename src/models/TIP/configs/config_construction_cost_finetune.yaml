@@ -86,7 +86,6 @@ replace_special_rate: 0.0  # Not used during fine-tuning
 check_val_every_n_epoch: 1
 val_check_interval: 1.0  # Check validation every epoch
 eval_metric: rmsle  # Metric to monitor for best checkpoint (rmsle, mae, rmse) - rmsle is primary
-regression_loss: rmsle  # Loss function for fine-tuning (rmsle, huber, mae, mse)
 regression_head_class: RegressionMLP  # Head class name from ConstructionCostHead module (must match class name exactly)
 regression_head_dropout: 0.2  # Dropout probability for regression head
 limit_train_batches: null  # Use all training batches

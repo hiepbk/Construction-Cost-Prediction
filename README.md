@@ -356,7 +356,7 @@ python run.py pretrain=True
 ```
 
 **Training Outputs:**
-- Checkpoints saved to: `work_dir/runs/multimodal/{wandb_run_name}/`
+- Checkpoints saved to: `work_dir/runs/pretrain/{wandb_run_name}/`
   - `checkpoint_best_rmsle_*.ckpt` - Best checkpoint based on validation RMSLE
   - `checkpoint_last_epoch_*.ckpt` - Last epoch checkpoint
 - WandB logs: Training metrics, validation metrics, and prediction logs
@@ -390,7 +390,8 @@ conda activate ccp
 cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
 python run.py \
     --config-name=config_construction_cost_finetune \
-    checkpoint=/hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/multimodal/tip_pretrain_*/checkpoint_best_rmsle_*.ckpt \
+    finetune=True \
+    checkpoint=/hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/pretrain/tip_pretrain_*/checkpoint_best_rmsle_*.ckpt \
     batch_size=16 \
     max_epochs=50 \
     lr_eval=1e-4
@@ -402,12 +403,13 @@ conda activate ccp
 cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
 python run.py \
     --config-name=config_construction_cost_finetune \
-    checkpoint=/hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/multimodal/tip_pretrain_construction_cost_1219_2130/checkpoint_last_epoch_99.ckpt
+    finetune=True \
+    checkpoint=/hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/pretrain/tip_pretrain_construction_cost_1219_2130/checkpoint_best_rmsle_99_0.2571.ckpt
 ```
 
 **Note:** The checkpoint path must be an **absolute path** or relative to the project root. Since the script runs from `src/models/TIP`, use absolute paths like `/hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/...`
 
-**Note:** The `evaluate=True` flag is already set in the fine-tuning config, so you don't need to specify it. You can override it if needed.
+**Note:** The `finetune=True` flag is already set in the fine-tuning config, but it's good practice to include it explicitly in the command for clarity. You can also override other config parameters like `batch_size`, `max_epochs`, `lr_eval`, etc.
 
 **Fine-Tuning Strategy:**
 - **Frozen Backbone**: The entire pretrained backbone (image encoder, tabular encoder, multimodal encoder) is frozen
@@ -415,8 +417,8 @@ python run.py \
 - This approach is faster and requires less memory, while leveraging the pretrained representations
 
 **Fine-Tuning Outputs:**
-- Checkpoints saved to: `work_dir/runs/eval/{wandb_run_name}/`
-  - `checkpoint_best_mae.ckpt` - Best checkpoint based on validation MAE
+- Checkpoints saved to: `work_dir/runs/finetune/{wandb_run_name}/`
+  - `checkpoint_best_rmsle.ckpt` - Best checkpoint based on validation RMSLE
 - WandB logs: Training and validation metrics
 
 **Key Config Parameters:**
@@ -449,7 +451,7 @@ cd /hdd/hiep/CODE/Construction_Cost_Prediction
 ```bash
 cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
 python evaluate_construction_cost.py \
-    --checkpoint work_dir/runs/multimodal/tip_pretrain_*/checkpoint_best_rmsle_*.ckpt \
+    --checkpoint work_dir/runs/pretrain/tip_pretrain_*/checkpoint_best_rmsle_*.ckpt \
     --val_csv /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean.csv \
     --test_csv /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/test/test_clean.csv \
     --composite_dir_trainval /hdd/hiep/CODE/Construction_Cost_Prediction/data/trainval_composite \

@@ -251,7 +251,7 @@ def _pretrain_single_fold(hparams, wandb_logger, fold_index):
 
   # Create logdir based on WandB run name
   # Add fold information to logdir if using k-fold
-  base_logdir = create_logdir(hparams.datatype, hparams.resume_training, wandb_logger)
+  base_logdir = create_logdir('pretrain', hparams.resume_training, wandb_logger)
   if fold_index is not None:
     logdir = os.path.join(base_logdir, f'fold_{fold_index}')
     os.makedirs(logdir, exist_ok=True)

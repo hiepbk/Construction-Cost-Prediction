@@ -281,6 +281,7 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index):
     
     # Create logdir based on WandB run name
     # Add fold information to logdir if using k-fold
+    # Use 'multimodal' to match pretrain structure: runs/multimodal/tip_finetune_...
     base_logdir = create_logdir('finetune', False, wandb_logger)
     if fold_index is not None:
         logdir = os.path.join(base_logdir, f'fold_{fold_index}')
