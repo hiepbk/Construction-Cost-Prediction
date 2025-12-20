@@ -1,25 +1,24 @@
 '''
-Regression Evaluator for Construction Cost Prediction
-Adapts TIP's Evaluator for regression task with log-transformed targets.
+Fine-tuning module for Construction Cost Prediction
+Adapts TIP's pretrained backbone for regression task with log-transformed targets.
 '''
 from typing import Tuple
 import torch
 import torch.nn as nn
 import torchmetrics
 import pytorch_lightning as pl
-import numpy as np
 
-from models.Tip_utils.Tip_downstream import TIPBackbone
+from models.ConstructionCostPrediction import ConstructionCostPrediction
 
 
-class Evaluator_ConstructionCost(pl.LightningModule):
+class ConstructionCostFinetuning(pl.LightningModule):
     """
-    Evaluator for construction cost regression using TIP-pretrained backbone.
+    Fine-tuning module for construction cost regression using TIP-pretrained backbone.
     
     Features:
     - Log-transform target (log(1 + cost))
-    - Huber loss (robust to outliers)
-    - MAE, RMSE, R² metrics
+    - RMSLE, Huber, MAE, or MSE loss
+    - MAE, RMSE, RMSLE metrics
     - Denormalization for evaluation
     """
     
@@ -33,8 +32,20 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         if not hasattr(hparams, 'num_classes'):
             hparams.num_classes = 1  # Regression: single output
         
-        # Create TIP backbone with regression head
-        self.model = TIPBackbone(hparams)
+
+        
+        # Get checkpoint path from hparams (set during fine-tuning)
+        checkpoint_path = getattr(hparams, 'checkpoint', None)
+        field_lengths_path = getattr(hparams, 'field_lengths_tabular', None)
+        
+        self.model = ConstructionCostPrediction(
+            hparams=hparams,
+            checkpoint_path=checkpoint_path,
+            field_lengths_path=field_lengths_path
+        )
+        
+        regression_head_class = getattr(hparams, 'regression_head_class', 'RegressionMLP')
+        print(f"✅ ConstructionCostPrediction model created with head: {regression_head_class}")
         
         # Loss function: RMSLE (competition metric), Huber (robust to outliers), MAE, or MSE
         loss_type = getattr(hparams, 'regression_loss', 'huber')
@@ -80,7 +91,7 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         self.best_val_rmsle = float('inf')
         self.best_val_score = float('inf')  # For compatibility with evaluate.py (will be set based on eval_metric)
         
-        print(f"Initialized Evaluator_ConstructionCost")
+        print(f"Initialized ConstructionCostFinetuning")
         print(f"  Loss: {loss_type}")
         print(f"  Target log-transform: {self.target_log_transform}")
         print(f"  Target normalization: mean={self.target_mean:.2f}, std={self.target_std:.2f}")
@@ -393,7 +404,7 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         param_groups = []
         
         # Regression head: always trainable
-        regressor_params = list(self.model.classifier.parameters())
+        regressor_params = list(self.model.backbone.classifier.parameters())
         if regressor_params:
             regressor_lr = self.hparams.lr_eval * 10.0  # 10x for regression head
             param_groups.append({
@@ -405,7 +416,7 @@ class Evaluator_ConstructionCost(pl.LightningModule):
         # Only add encoder parameters if finetune_strategy is 'trainable'
         if finetune_strategy == 'trainable':
             # Multimodal encoder: base LR
-            multimodal_params = list(self.model.encoder_multimodal.parameters())
+            multimodal_params = list(self.model.backbone.encoder_multimodal.parameters())
             if multimodal_params:
                 param_groups.append({
                     'params': multimodal_params,
@@ -414,7 +425,7 @@ class Evaluator_ConstructionCost(pl.LightningModule):
                 print(f"✅ Multimodal encoder: trainable, LR={self.hparams.lr_eval:.2e}")
             
             # Tabular encoder: base LR (or lower if freeze_tabular=True)
-            tabular_params = list(self.model.encoder_tabular.parameters())
+            tabular_params = list(self.model.backbone.encoder_tabular.parameters())
             if tabular_params and not getattr(self.hparams, 'freeze_tabular', False):
                 tabular_lr = self.hparams.lr_eval * 0.1 if getattr(self.hparams, 'freeze_tabular', False) else self.hparams.lr_eval
                 param_groups.append({
@@ -424,7 +435,7 @@ class Evaluator_ConstructionCost(pl.LightningModule):
                 print(f"✅ Tabular encoder: trainable, LR={tabular_lr:.2e}")
             
             # Image encoder: lower LR (or frozen)
-            image_params = list(self.model.encoder_imaging.parameters())
+            image_params = list(self.model.backbone.encoder_imaging.parameters())
             if image_params and not getattr(self.hparams, 'freeze_image', True):
                 image_lr = self.hparams.lr_eval * 0.01 if getattr(self.hparams, 'freeze_image', True) else self.hparams.lr_eval * 0.1
                 param_groups.append({
@@ -436,12 +447,12 @@ class Evaluator_ConstructionCost(pl.LightningModule):
             # finetune_strategy == 'frozen': only train classifier
             print("🔒 Backbone frozen: Only training regression head (classifier)")
             # Verify encoders are frozen
-            total_frozen = sum(1 for p in self.model.encoder_imaging.parameters() if not p.requires_grad)
-            total_frozen += sum(1 for p in self.model.encoder_tabular.parameters() if not p.requires_grad)
-            total_frozen += sum(1 for p in self.model.encoder_multimodal.parameters() if not p.requires_grad)
-            total_params = sum(1 for p in self.model.encoder_imaging.parameters())
-            total_params += sum(1 for p in self.model.encoder_tabular.parameters())
-            total_params += sum(1 for p in self.model.encoder_multimodal.parameters())
+            total_frozen = sum(1 for p in self.model.backbone.encoder_imaging.parameters() if not p.requires_grad)
+            total_frozen += sum(1 for p in self.model.backbone.encoder_tabular.parameters() if not p.requires_grad)
+            total_frozen += sum(1 for p in self.model.backbone.encoder_multimodal.parameters() if not p.requires_grad)
+            total_params = sum(1 for p in self.model.backbone.encoder_imaging.parameters())
+            total_params += sum(1 for p in self.model.backbone.encoder_tabular.parameters())
+            total_params += sum(1 for p in self.model.backbone.encoder_multimodal.parameters())
             print(f"   Frozen parameters: {total_frozen}/{total_params} in encoders")
         
         if not param_groups:

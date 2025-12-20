@@ -25,8 +25,14 @@ from models.VIME import VIME
 from models.Tips.TipModel3Loss import TIP3Loss
 
 
-def load_datasets(hparams):
-  """Load ConstructionCostTIPDataset for train and validation."""
+def load_datasets(hparams, fold_index=None):
+  """Load ConstructionCostTIPDataset for train and validation.
+  
+  Args:
+    hparams: Hyperparameters
+    fold_index: Current fold index (0 to k_fold-1). If None and use_kfold=True, 
+                will use k_fold_current from hparams. If -1, will raise error.
+  """
   
   use_kfold = getattr(hparams, 'use_kfold', False)
   
@@ -48,25 +54,28 @@ def load_datasets(hparams):
     # Get k-fold parameters
     k_fold = getattr(hparams, 'k_fold', 5)
     k_fold_seed = getattr(hparams, 'k_fold_seed', 42)
-    k_fold_current = getattr(hparams, 'k_fold_current', 0)
     
-    if k_fold_current < 0 or k_fold_current >= k_fold:
-      raise ValueError(f"k_fold_current must be between 0 and {k_fold-1}, got {k_fold_current}")
+    # Use fold_index if provided, otherwise use k_fold_current from hparams
+    if fold_index is None:
+      fold_index = getattr(hparams, 'k_fold_current', 0)
     
-    print(f"K-Fold parameters: k={k_fold}, seed={k_fold_seed}, current_fold={k_fold_current}")
+    if fold_index < 0 or fold_index >= k_fold:
+      raise ValueError(f"fold_index must be between 0 and {k_fold-1}, got {fold_index}")
+    
+    print(f"K-Fold parameters: k={k_fold}, seed={k_fold_seed}, current_fold={fold_index}")
     
     # Create k-fold splitter
     kf = KFold(n_splits=k_fold, shuffle=True, random_state=k_fold_seed)
     
     # Get indices for current fold
     indices = np.arange(len(df_trainval))
-    train_indices, val_indices = list(kf.split(indices))[k_fold_current]
+    train_indices, val_indices = list(kf.split(indices))[fold_index]
     
     # Split dataframe
     df_train = df_trainval.iloc[train_indices].reset_index(drop=True)
     df_val = df_trainval.iloc[val_indices].reset_index(drop=True)
     
-    print(f"Fold {k_fold_current}: Train={len(df_train)} samples, Val={len(df_val)} samples")
+    print(f"Fold {fold_index}: Train={len(df_train)} samples, Val={len(df_val)} samples")
     
     # Use trainval metadata (same for both train and val since they come from same source)
     trainval_metadata = getattr(hparams, 'trainval_metadata_path', None)
@@ -169,11 +178,60 @@ def pretrain(hparams, wandb_logger):
   IN
   hparams:      All hyperparameters
   wandb_logger: Instantiated weights and biases logger
+  
+  If use_kfold=True and k_fold_current is not specified (or -1), 
+  automatically runs all k-folds sequentially.
   """
   pl.seed_everything(hparams.seed)
 
+  use_kfold = getattr(hparams, 'use_kfold', False)
+  
+  if use_kfold:
+    # Automatic k-fold: run all folds sequentially
+    k_fold = getattr(hparams, 'k_fold', 5)
+    k_fold_current = getattr(hparams, 'k_fold_current', -1)
+    
+    # If k_fold_current is -1 or not specified, run all folds
+    if k_fold_current == -1 or k_fold_current is None:
+      print("="*60)
+      print(f"AUTOMATIC K-FOLD: Running all {k_fold} folds sequentially")
+      print("="*60)
+      
+      for fold_idx in range(k_fold):
+        print("\n" + "="*60)
+        print(f"FOLD {fold_idx + 1}/{k_fold}")
+        print("="*60)
+        
+        # Update hparams with current fold for logging
+        from omegaconf import open_dict
+        with open_dict(hparams):
+          hparams.k_fold_current = fold_idx
+        
+        # Run training for this fold
+        _pretrain_single_fold(hparams, wandb_logger, fold_idx)
+      
+      print("\n" + "="*60)
+      print(f"✅ ALL {k_fold} FOLDS COMPLETE!")
+      print("="*60)
+    else:
+      # Run single fold
+      _pretrain_single_fold(hparams, wandb_logger, k_fold_current)
+  else:
+    # Fixed split: run normally
+    _pretrain_single_fold(hparams, wandb_logger, None)
+
+
+def _pretrain_single_fold(hparams, wandb_logger, fold_index):
+  """
+  Train a single fold (or fixed split if fold_index is None).
+  
+  Args:
+    hparams: All hyperparameters
+    wandb_logger: Instantiated weights and biases logger
+    fold_index: Current fold index (0 to k_fold-1) or None for fixed split
+  """
   # Load appropriate dataset
-  train_dataset, val_dataset = load_datasets(hparams)
+  train_dataset, val_dataset = load_datasets(hparams, fold_index=fold_index)
 
   
   train_loader = DataLoader(
@@ -192,7 +250,14 @@ def pretrain(hparams, wandb_logger):
   print(f'Valid batch size: {hparams.batch_size*cuda.device_count()}')
 
   # Create logdir based on WandB run name
-  logdir = create_logdir(hparams.datatype, hparams.resume_training, wandb_logger)
+  # Add fold information to logdir if using k-fold
+  base_logdir = create_logdir(hparams.datatype, hparams.resume_training, wandb_logger)
+  if fold_index is not None:
+    logdir = os.path.join(base_logdir, f'fold_{fold_index}')
+    os.makedirs(logdir, exist_ok=True)
+    print(f"Fold {fold_index} checkpoint directory: {logdir}")
+  else:
+    logdir = base_logdir
   
   # Ensure target normalization stats are in hparams (will be saved in checkpoint via save_hyperparameters)
   # This ensures they are saved in the checkpoint for later use
@@ -236,7 +301,8 @@ def pretrain(hparams, wandb_logger):
         target_std=target_std,
         log_transform_target=getattr(hparams, 'target_log_transform', True),
         multimodal=(hparams.datatype=='multimodal'),
-        strategy=hparams.strategy
+        strategy=hparams.strategy,
+        regression_head_class=getattr(hparams, 'regression_head_class', 'RegressionMLP')
       ))
     else:
       # Classification online evaluation

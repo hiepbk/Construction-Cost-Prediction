@@ -84,23 +84,8 @@ class TIPBackbone(nn.Module):
       if args.share_weights == True:
         tie_encoder_decoder_weights(self.encoder_tabular, self.encoder_multimodal, '', '/mlp')
 
-    # Classification or Regression head
-    if hasattr(args, 'task') and args.task == 'regression':
-      # Regression head
-      self.classifier = nn.Sequential(
-        nn.Linear(self.hidden_dim, self.hidden_dim),
-        nn.LayerNorm(self.hidden_dim),
-        nn.GELU(),
-        nn.Dropout(0.1),
-        nn.Linear(self.hidden_dim, self.hidden_dim // 2),
-        nn.LayerNorm(self.hidden_dim // 2),
-        nn.GELU(),
-        nn.Dropout(0.1),
-        nn.Linear(self.hidden_dim // 2, 1)  # Single output for regression
-      )
-    else:
-      # Classification head
-      self.classifier = nn.Linear(self.hidden_dim, args.num_classes)
+    # Classification or Regression head (always use simple Linear, will be replaced by ConstructionCostPrediction if needed)
+    self.classifier = nn.Linear(self.hidden_dim, args.num_classes)
 
 
   def create_imaging_model(self, args):

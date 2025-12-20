@@ -31,141 +31,11 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from datasets.ConstructionCostTIPDataset import ConstructionCostTIPDataset
-from models.Tip_utils.Tip_downstream import TIPBackbone
+from models.ConstructionCostPrediction import ConstructionCostPrediction
 from omegaconf import OmegaConf, DictConfig, open_dict
 
 
-class TIPRegressionModel(nn.Module):
-    """TIP model with regression head for construction cost prediction."""
-    def __init__(self, checkpoint_path: str, field_lengths_path: str, freeze_backbone: bool = True):
-        super().__init__()
-        
-        # Load checkpoint
-        print(f"Loading checkpoint from: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        hparams = OmegaConf.create(checkpoint['hyper_parameters'])
-        
-        # Use open_dict to allow adding new keys (OmegaConf struct mode)
-        with open_dict(hparams):
-            # Create TIP backbone with regression head
-            hparams.checkpoint = checkpoint_path
-            hparams.field_lengths_tabular = field_lengths_path
-            
-            # Set required attributes
-            if not hasattr(hparams, 'algorithm_name'):
-                hparams.algorithm_name = 'tip'
-            if not hasattr(hparams, 'missing_tabular'):
-                hparams.missing_tabular = False
-            
-            # Set task to regression to use regression head
-            hparams.task = 'regression'
-            hparams.num_classes = 1  # Regression: single output
-        
-        self.backbone = TIPBackbone(hparams)
-        
-        # Try to load online regression head weights from checkpoint callback state
-        # The online regression head was trained during pretraining and saved in callback state
-        # This is critical - without loading these weights, we use a random regression head!
-        online_regression_loaded = False
-        if 'callbacks' in checkpoint:
-            # Find the SSLOnlineEvaluatorRegression callback state
-            # PyTorch Lightning saves callbacks with keys like: "SSLOnlineEvaluatorRegression{hash}"
-            for key in checkpoint['callbacks'].keys():
-                if 'SSLOnlineEvaluatorRegression' in key or 'ssl_online_regression' in key.lower():
-                    callback_state = checkpoint['callbacks'][key]
-                    if 'state_dict' in callback_state:
-                        try:
-                            # The online regression head has a different architecture than TIPBackbone's classifier
-                            # We need to create a matching regression head and load the weights
-                            from utils.ssl_online_regression import RegressionMLP
-                            z_dim = hparams.multimodal_embedding_dim
-                            hidden_dim = getattr(hparams, 'embedding_dim', z_dim)
-                            
-                            # Create the same architecture as the online evaluator
-                            online_regression_head = RegressionMLP(
-                                n_input=z_dim,
-                                n_hidden=hidden_dim,
-                                p=0.2  # Default dropout
-                            )
-                            
-                            # Load the trained weights
-                            online_regression_head.load_state_dict(callback_state['state_dict'])
-                            
-                            # Replace the random classifier with the trained one
-                            self.backbone.classifier = online_regression_head
-                            print("✅ Loaded trained online regression head weights from checkpoint")
-                            online_regression_loaded = True
-                            break
-                        except Exception as e:
-                            print(f"⚠️  Warning: Could not load online regression head weights: {e}")
-                            import traceback
-                            traceback.print_exc()
-        
-        if not online_regression_loaded:
-            print("⚠️  WARNING: No online regression head weights found in checkpoint!")
-            print("   Using randomly initialized regression head from TIPBackbone")
-            print("   This will result in poor performance (random weights)")
-            print("   Expected RMSLE: ~1.2 (random) vs ~0.3 (trained)")
-        
-        # Freeze backbone if requested
-        if freeze_backbone:
-            for param in self.backbone.parameters():
-                param.requires_grad = False
-            print("Backbone frozen")
-        else:
-            print("Backbone trainable")
-        
-        # Load target normalization stats from config file only
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        config_path = os.path.join(script_dir, 'configs', 'config_construction_cost_pretrain.yaml')
-        
-        if not os.path.exists(config_path):
-            raise FileNotFoundError(f"Config file not found: {config_path}")
-        
-        config = OmegaConf.load(config_path)
-        self.target_mean = float(config.get('target_mean', 0.0))
-        self.target_std = float(config.get('target_std', 1.0))
-        self.target_log_transform = bool(config.get('target_log_transform', True))
-        
-        print(f"Model initialized (from checkpoint):")
-        print(f"  Embedding dim: {hparams.multimodal_embedding_dim}")
-        print(f"  Target mean: {self.target_mean:.4f} (from config)")
-        print(f"  Target std: {self.target_std:.4f} (from config)")
-        print(f"  Log transform: {self.target_log_transform}")
-    
-    def forward(self, x: Tuple) -> torch.Tensor:
-        """
-        Forward pass.
-        
-        Args:
-            x: Tuple of (image, tabular) or (image, tabular, mask)
-        
-        Returns:
-            prediction: (B, 1) - Predicted cost in normalized log space
-        """
-        # TIPBackbone already includes regression head
-        prediction = self.backbone(x)  # (B, 1)
-        
-        return prediction
-    
-    def denormalize(self, y: torch.Tensor) -> torch.Tensor:
-        """
-        Denormalize predictions to original scale (USD/m²).
-        
-        Args:
-            y: Normalized predictions (in log space if log_transform=True)
-        
-        Returns:
-            Predictions in original scale (USD/m²)
-        """
-        # Denormalize: y_orig = y_norm * std + mean
-        y_denorm = y * self.target_std + self.target_mean
-        
-        # Reverse log-transform: exp(y) - 1
-        if self.target_log_transform:
-            y_denorm = torch.expm1(y_denorm)  # exp(y) - 1
-        
-        return y_denorm
+# TIPRegressionModel removed - ConstructionCostPrediction is used directly
 
 
 def compute_rmsle(y_true: torch.Tensor, y_pred: torch.Tensor) -> float:
@@ -192,12 +62,15 @@ def compute_rmsle(y_true: torch.Tensor, y_pred: torch.Tensor) -> float:
 
 
 def evaluate_validation(
-    model: TIPRegressionModel,
+    model: ConstructionCostPrediction,
     val_loader: DataLoader,
     device: torch.device,
     save_predictions: bool = True,
     output_dir: str = None,
-    checkpoint_path: Optional[str] = None
+    checkpoint_path: Optional[str] = None,
+    target_mean: float = 0.0,
+    target_std: float = 1.0,
+    target_log_transform: bool = True
 ) -> dict:
     """
     Evaluate model on validation set.
@@ -243,10 +116,10 @@ def evaluate_validation(
             
             # Convert prediction from normalized log space to original scale (USD/m²)
             # Step 1: Denormalize (reverse normalization)
-            pred_log = (pred_normalized.squeeze() * model.target_std) + model.target_mean  # (B,)
+            pred_log = (pred_normalized.squeeze() * target_std) + target_mean  # (B,)
             
             # Step 2: Reverse log-transform to get original scale
-            if model.target_log_transform:
+            if target_log_transform:
                 pred_original = torch.expm1(pred_log)  # exp(x) - 1
             else:
                 pred_original = pred_log
@@ -324,12 +197,15 @@ def evaluate_validation(
 
 
 def run_inference(
-    model: TIPRegressionModel,
+    model: ConstructionCostPrediction,
     test_loader: DataLoader,
     device: torch.device,
     output_path: str,
     checkpoint_path: Optional[str] = None,
-    data_ids: list = None
+    data_ids: list = None,
+    target_mean: float = 0.0,
+    target_std: float = 1.0,
+    target_log_transform: bool = True
 ):
     """
     Run inference on test set and generate submission CSV.
@@ -372,10 +248,10 @@ def run_inference(
             
             # Convert prediction from normalized log space to original scale (USD/m²)
             # Step 1: Denormalize (reverse normalization)
-            pred_log = (pred_normalized.squeeze() * model.target_std) + model.target_mean  # (B,)
+            pred_log = (pred_normalized.squeeze() * target_std) + target_mean  # (B,)
             
             # Step 2: Reverse log-transform to get original scale
-            if model.target_log_transform:
+            if target_log_transform:
                 pred_original = torch.expm1(pred_log)  # exp(x) - 1
             else:
                 pred_original = pred_log
@@ -467,16 +343,56 @@ def main():
     device = torch.device(args.device)
     print(f"Using device: {device}")
     
-    # Load model
+    # Load checkpoint to get hyperparameters
     print("\n" + "="*60)
     print("LOADING MODEL")
     print("="*60)
-    model = TIPRegressionModel(
+    print(f"Loading checkpoint from: {args.checkpoint}")
+    checkpoint = torch.load(args.checkpoint, map_location='cpu')
+    hparams = OmegaConf.create(checkpoint['hyper_parameters'])
+    
+    # Use open_dict to allow adding new keys (OmegaConf struct mode)
+    with open_dict(hparams):
+        # Set required attributes
+        if not hasattr(hparams, 'algorithm_name'):
+            hparams.algorithm_name = 'tip'
+        if not hasattr(hparams, 'missing_tabular'):
+            hparams.missing_tabular = False
+    
+    # Create ConstructionCostPrediction model (handles all head loading logic)
+    model = ConstructionCostPrediction(
+        hparams=hparams,
         checkpoint_path=args.checkpoint,
-        field_lengths_path=args.field_lengths,
-        freeze_backbone=args.freeze_backbone
+        field_lengths_path=args.field_lengths
     )
+    
+    # Freeze backbone if requested
+    if args.freeze_backbone:
+        for param in model.parameters():
+            param.requires_grad = False
+        print("Backbone frozen")
+    else:
+        print("Backbone trainable")
+    
     model = model.to(device)
+    
+    # Load target normalization stats from config file only
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, 'configs', 'config_construction_cost_pretrain.yaml')
+    
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    
+    config = OmegaConf.load(config_path)
+    target_mean = float(config.get('target_mean', 0.0))
+    target_std = float(config.get('target_std', 1.0))
+    target_log_transform = bool(config.get('target_log_transform', True))
+    
+    print(f"Model initialized (from checkpoint):")
+    print(f"  Embedding dim: {hparams.multimodal_embedding_dim}")
+    print(f"  Target mean: {target_mean:.4f} (from config)")
+    print(f"  Target std: {target_std:.4f} (from config)")
+    print(f"  Log transform: {target_log_transform}")
     
     # Load validation dataset
     print("\n" + "="*60)
@@ -497,10 +413,10 @@ def main():
     )
     
     # Target normalization stats: only from config/checkpoint (never from pickle/metadata)
-    if (model.target_mean, model.target_std) != (0.0, 1.0):
+    if (target_mean, target_std) != (0.0, 1.0):
         print(f"\n✅ Using target normalization from config/checkpoint (log space):")
-        print(f"   Target mean: {model.target_mean:.4f}")
-        print(f"   Target std: {model.target_std:.4f}")
+        print(f"   Target mean: {target_mean:.4f}")
+        print(f"   Target std: {target_std:.4f}")
     else:
         print(f"\n⚠️  WARNING: target_mean and target_std are still defaults (0.0, 1.0)")
         print(f"   This will cause incorrect denormalization!")
@@ -525,7 +441,10 @@ def main():
         device=device,
         save_predictions=True,
         output_dir=args.output_dir,
-        checkpoint_path=args.checkpoint
+        checkpoint_path=args.checkpoint,
+        target_mean=target_mean,
+        target_std=target_std,
+        target_log_transform=target_log_transform
     )
     
     # Load test dataset
@@ -565,7 +484,10 @@ def main():
         device=device,
         output_path=submission_path,
         checkpoint_path=args.checkpoint,
-        data_ids=None  # Will extract from dataset
+        data_ids=None,  # Will extract from dataset
+        target_mean=target_mean,
+        target_std=target_std,
+        target_log_transform=target_log_transform
     )
     
     print("\n" + "="*60)

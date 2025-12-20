@@ -15,35 +15,8 @@ import torchmetrics
 
 from pl_bolts.models.self_supervised.evaluator import SSLEvaluator
 
-
-class RegressionMLP(nn.Module):
-    """
-    Simple MLP for regression evaluation.
-    Takes frozen embeddings and predicts a scalar target.
-    """
-    def __init__(
-        self,
-        n_input: int,
-        n_hidden: Optional[int] = None,
-        p: float = 0.2,
-    ):
-        super().__init__()
-        n_hidden = n_hidden or n_input
-        
-        self.mlp = nn.Sequential(
-            nn.Linear(n_input, n_hidden),
-            nn.BatchNorm1d(n_hidden),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p),
-            nn.Linear(n_hidden, n_hidden // 2),
-            nn.BatchNorm1d(n_hidden // 2),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p),
-            nn.Linear(n_hidden // 2, 1)  # Single output for regression
-        )
-    
-    def forward(self, x: Tensor) -> Tensor:
-        return self.mlp(x).squeeze(-1)  # (B, 1) -> (B,)
+# Import head classes from ConstructionCostHead module
+from models.ConstructionCostHead import get_head_class, create_head
 
 
 class SSLOnlineEvaluatorRegression(Callback):
@@ -77,6 +50,7 @@ class SSLOnlineEvaluatorRegression(Callback):
         swav: bool = False,
         multimodal: bool = False,
         strategy: str = None,
+        regression_head_class: str = 'RegressionMLP',  # Head class name from ConstructionCostHead
     ):
         """
         Args:
@@ -107,8 +81,9 @@ class SSLOnlineEvaluatorRegression(Callback):
         self.strategy = strategy
         
         self.optimizer: Optional[Optimizer] = None
-        self.online_evaluator: Optional[RegressionMLP] = None
+        self.online_evaluator: Optional[nn.Module] = None  # Can be any head class
         self._recovered_callback_state: Optional[Dict[str, Any]] = None
+        self.regression_head_class = regression_head_class  # Store head class name for checkpoint
         
         # Regression metrics
         self.mae_train = None
@@ -126,9 +101,10 @@ class SSLOnlineEvaluatorRegression(Callback):
         self.debug_printed_this_epoch = False  # Track if we've already printed debug info this epoch
     
     def on_fit_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
-        """Initialize the regression MLP and optimizer."""
-        # Create regression MLP
-        self.online_evaluator = RegressionMLP(
+        """Initialize the regression head and optimizer."""
+        # Create regression head using the specified class from ConstructionCostHead
+        self.online_evaluator = create_head(
+            head_name=self.regression_head_class,
             n_input=self.z_dim,
             n_hidden=self.hidden_dim,
             p=self.drop_p,
@@ -535,6 +511,7 @@ class SSLOnlineEvaluatorRegression(Callback):
         """Save regression head state."""
         return {
             "state_dict": self.online_evaluator.state_dict(),
+            "regression_head_class": self.regression_head_class,  # Save head class name for loading
             "optimizer_state": self.optimizer.state_dict()
         }
     

@@ -32,8 +32,8 @@ checkpoint: null  # Set to: work_dir/runs/multimodal/tip_pretrain_*/checkpoint_b
 use_kfold: false  # If true, use k-fold CV from unified trainval.csv; if false, use fixed train/val splits
 k_fold: 5  # Number of folds (only used if use_kfold=true)
 k_fold_seed: 42  # Random seed for k-fold splitting (only used if use_kfold=true)
-k_fold_current: 0  # Current fold to use (0-indexed, 0 to k_fold-1) (only used if use_kfold=true)
-data_trainval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/trainval_tabular.csv  # Unified trainval CSV (only used if use_kfold=true)
+k_fold_current: -1  # Current fold to use (0-indexed, 0 to k_fold-1). Set to -1 (default) to run all folds automatically (only used if use_kfold=true)
+data_trainval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval/trainval_clean.csv  # Unified trainval CSV (preprocessed, only used if use_kfold=true)
 
 # Fixed Split Options (only used if use_kfold=false)
 data_train_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean.csv
@@ -45,7 +45,7 @@ val_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/v
 composite_dir_trainval: /hdd/hiep/CODE/Construction_Cost_Prediction/data/trainval_composite  # For train/val sets (both use this)
 composite_dir_test: /hdd/hiep/CODE/Construction_Cost_Prediction/data/test_composite  # For test set (only for final inference, no training)
 field_lengths_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/field_lengths.pt
-trainval_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval_metadata.pkl  # Metadata for unified trainval (used if use_kfold=true)
+trainval_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval/trainval_clean_metadata.pkl  # Metadata for unified trainval (used if use_kfold=true)
 labels_train_eval_imaging: null  # Not needed for fine-tuning - targets are in CSV file
 labels_val_eval_imaging: null  # Not needed for fine-tuning - targets are in CSV file
 
@@ -86,6 +86,9 @@ replace_special_rate: 0.0  # Not used during fine-tuning
 check_val_every_n_epoch: 1
 val_check_interval: 1.0  # Check validation every epoch
 eval_metric: rmsle  # Metric to monitor for best checkpoint (rmsle, mae, rmse) - rmsle is primary
+regression_loss: rmsle  # Loss function for fine-tuning (rmsle, huber, mae, mse)
+regression_head_class: RegressionMLP  # Head class name from ConstructionCostHead module (must match class name exactly)
+regression_head_dropout: 0.2  # Dropout probability for regression head
 limit_train_batches: null  # Use all training batches
 limit_val_batches: null  # Use all validation batches
 limit_test_batches: null  # Use all test batches
@@ -110,7 +113,8 @@ use_viirs: true
 
 # Training Mode Flags
 pretrain: false  # Set to true for pretraining
-evaluate: true   # Set to true for fine-tuning/evaluation
+finetune: true   # Set to true for fine-tuning (construction cost specific)
+evaluate: false  # Set to true for generic evaluation/fine-tuning (other tasks)
 test: false     # Set to true for testing
 generate_embeddings: false  # Set to true to generate embeddings only
 

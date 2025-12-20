@@ -150,6 +150,9 @@ Construction_Cost_Prediction/
 │   └── test_composite/              # Satellite imagery for test set
 │
 ├── data/annotation/                 # Preprocessed data (created by preprocessing)
+│   ├── trainval/                   # Unified trainval set (for k-fold cross-validation)
+│   │   ├── trainval_clean.csv
+│   │   └── trainval_clean_metadata.pkl
 │   ├── train/
 │   │   ├── train_clean.csv          # Training set (from trainval split, has ground truth)
 │   │   └── train_clean_metadata.pkl # Training metadata
@@ -166,10 +169,12 @@ Construction_Cost_Prediction/
 
 **Preprocessing Flow:**
 1. **Input:** `trainval_tabular.csv` (contains all training data with ground truth)
-2. **Split:** Preprocessing splits `trainval_tabular.csv` into:
-   - `train_clean.csv` (80% of trainval, has ground truth) → uses `trainval_composite/`
-   - `val_clean.csv` (20% of trainval, has ground truth) → uses `trainval_composite/`
-3. **Test:** `test.csv` (separate file, NO ground truth, only for final submission) → uses `test_composite/`
+2. **Preprocess entire trainval:** Creates unified trainval set for k-fold cross-validation:
+   - `trainval/trainval_clean.csv` + `trainval_clean_metadata.pkl` → uses `trainval_composite/`
+3. **Split:** Preprocessing splits `trainval_tabular.csv` into:
+   - `train/train_clean.csv` (80% of trainval, has ground truth) → uses `trainval_composite/`
+   - `val/val_clean.csv` (20% of trainval, has ground truth) → uses `trainval_composite/`
+4. **Test:** `test/test_clean.csv` (separate file, NO ground truth, only for final submission) → uses `test_composite/`
 
 **Composite Folder Mapping:**
 - **`trainval_composite/`**: Contains satellite TIFF files for **both** train and val sets
@@ -241,6 +246,7 @@ pip install -r requirements.txt
 ### Preprocessing
 
 Before training, you need to preprocess the tabular data. This script:
+- **Preprocesses entire trainval set** (creates `trainval/trainval_clean.csv` for k-fold cross-validation)
 - Splits trainval into train/val sets
 - Processes categorical and numerical features
 - Generates metadata for consistent feature mapping

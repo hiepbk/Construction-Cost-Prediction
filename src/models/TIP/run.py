@@ -14,6 +14,7 @@ import wandb
 
 from trainers.pretrain import pretrain
 from trainers.evaluate import evaluate
+from trainers.finetune import finetune
 from trainers.test import test
 from utils.utils import grab_arg_from_checkpoint, prepend_paths, re_prepend_paths
 
@@ -93,9 +94,18 @@ def run(args: DictConfig):
   
   if args.test:
     test(args, wandb_logger)
-  elif args.evaluate:
+  elif args.finetune:
+    # Use dedicated fine-tuning script for construction cost
     print('=================================================================================\n')
-    print('Start Finetuning')  
+    print('Start Fine-Tuning (Construction Cost)')  
+    print(f'Target is {args.target}')
+    print('=================================================================================\n')
+    torch.cuda.empty_cache()
+    finetune(args, wandb_logger)
+  elif args.evaluate:
+    # Use generic evaluate for other tasks
+    print('=================================================================================\n')
+    print('Start Evaluation/Finetuning')  
     print(f'Target is {args.target}')
     print('=================================================================================\n')
     torch.cuda.empty_cache()

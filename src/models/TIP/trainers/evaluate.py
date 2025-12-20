@@ -259,11 +259,11 @@ def evaluate(hparams, wandb_logger):
 
   logdir = create_logdir('eval', hparams.resume_training, wandb_logger)
 
-  # Use Evaluator_ConstructionCost if use_construction_cost_dataset is True
+  # Use ConstructionCostFinetuning if use_construction_cost_dataset is True
   use_construction_cost_dataset = getattr(hparams, 'use_construction_cost_dataset', False)
   if use_construction_cost_dataset and hparams.task == 'regression':
-    from models.Evaluator_ConstructionCost import Evaluator_ConstructionCost
-    model = Evaluator_ConstructionCost(hparams)
+    from models.ConstructionCostFinetuning import ConstructionCostFinetuning
+    model = ConstructionCostFinetuning(hparams)
   elif hparams.task == 'regression':
     model = Evaluator_Regression(hparams)
   else:

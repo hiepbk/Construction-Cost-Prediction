@@ -21,11 +21,11 @@ data_base: /hdd/hiep/CODE/Construction_Cost_Prediction
 # Data paths (absolute paths)
 
 # K-Fold Cross-Validation Options
-use_kfold: false  # If true, use k-fold CV from unified trainval.csv; if false, use fixed train/val splits
+use_kfold: True  # If true, use k-fold CV from unified trainval.csv; if false, use fixed train/val splits
 k_fold: 5  # Number of folds (only used if use_kfold=true)
 k_fold_seed: 42  # Random seed for k-fold splitting (only used if use_kfold=true)
-k_fold_current: 0  # Current fold to use (0-indexed, 0 to k_fold-1) (only used if use_kfold=true)
-data_trainval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/trainval_tabular.csv  # Unified trainval CSV (only used if use_kfold=true)
+k_fold_current: -1  # Current fold to use (0-indexed, 0 to k_fold-1). Set to -1 (default) to run all folds automatically (only used if use_kfold=true)
+data_trainval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval/trainval_clean.csv  # Unified trainval CSV (preprocessed, only used if use_kfold=true)
 
 # Fixed Split Options (only used if use_kfold=false)
 data_train_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean.csv
@@ -37,7 +37,7 @@ val_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/v
 composite_dir_trainval: /hdd/hiep/CODE/Construction_Cost_Prediction/data/trainval_composite  # For train and val sets
 composite_dir_test: /hdd/hiep/CODE/Construction_Cost_Prediction/data/test_composite  # For test set
 field_lengths_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/field_lengths.pt
-trainval_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval_metadata.pkl  # Metadata for unified trainval (used if use_kfold=true)
+trainval_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval/trainval_clean_metadata.pkl  # Metadata for unified trainval (used if use_kfold=true)
 labels_train: null  # Will be auto-generated
 labels_val: null    # Will be auto-generated
 
@@ -138,7 +138,10 @@ generate_embeddings: false  # Set to true to generate embeddings only
 algorithm_name: TIP
 online_mlp: true  # Enable online regression evaluation
 num_classes: 1  # For regression
-regression_loss: huber  # Options: rmsle (competition metric), huber (robust to outliers), mse, mae
+# regression_loss: huber  # Options: rmsle (competition metric), huber (robust to outliers), mse, mae
+regression_loss: rmsle
+regression_head_class: RegressionMLP  # Head class name from ConstructionCostHead module (must match class name exactly)
+regression_head_dropout: 0.2  # Dropout probability for regression head
 huber_delta: 1.0  # Delta parameter for Huber loss
 target_mean: 6.513477  # Mean of log(1 + target) values (computed from training dataset)
 target_std: 1.101045   # Std of log(1 + target) values (computed from training dataset)

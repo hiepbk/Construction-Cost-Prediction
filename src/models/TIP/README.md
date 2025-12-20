@@ -82,6 +82,50 @@ CUDA_VISIBLE_DEVICES=0 python -u run.py --config-name config_dvm_TIP exp_name=fi
 CUDA_VISIBLE_DEVICES=0 python -u run.py --config-name config_dvm_TIP exp_name=missing pretrain=False evaluate=True checkpoint={YOUR_PRETRAINED_CKPT_PATH} missing_tabular=True missing_strategy=value missing_rate=0.3
 ```
 
+## Construction Cost Prediction
+
+### Pre-training (Stage 1: Self-Supervised Learning)
+
+```sh
+cd src/models/TIP
+python run.py --config-name config_construction_cost_pretrain pretrain=True
+```
+
+**Output:** `work_dir/runs/multimodal/tip_pretrain_construction_cost_{MMDD_HHMM}/`
+
+### Fine-tuning (Stage 2: Supervised Fine-Tuning)
+
+```sh
+cd src/models/TIP
+python run.py --config-name config_construction_cost_finetune finetune=True checkpoint={PATH_TO_PRETRAIN_CHECKPOINT}
+```
+
+**Output:** `work_dir/runs/finetune/tip_finetune_construction_cost_{MMDD_HHMM}/`
+
+### Evaluation
+
+Evaluate a fine-tuned model on validation/test sets:
+
+```sh
+cd src/models/TIP
+python evaluate_construction_cost.py \
+  --checkpoint {PATH_TO_FINETUNE_CHECKPOINT} \
+  --val_csv {PATH_TO_VAL_CSV} \
+  --test_csv {PATH_TO_TEST_CSV} \
+  --composite_dir_trainval {PATH_TO_TRAINVAL_COMPOSITE_DIR} \
+  --composite_dir_test {PATH_TO_TEST_COMPOSITE_DIR} \
+  --field_lengths {PATH_TO_FIELD_LENGTHS_PT} \
+  --val_metadata {PATH_TO_VAL_METADATA_PKL} \
+  --test_metadata {PATH_TO_TEST_METADATA_PKL} \
+  --output_dir {OUTPUT_DIR} \
+  --batch_size 32
+```
+
+**Output:**
+- Validation metrics (RMSLE, MAE, RMSE, R²)
+- Validation predictions: `val_predictions_{checkpoint_name}_{timestamp}.csv`
+- Test submission: `submission_{checkpoint_name}_{timestamp}.csv`
+
 ## Checkpoints
 ### Pre-trained Checkpoints
 Datasets | DVM | Cardiac 
