@@ -73,25 +73,36 @@ class ConstructionCostPrediction(nn.Module):
                 hparams.num_classes = 1  # Regression: single output
         
         # Create TIPBackbone (will have default Linear classifier)
-        # For pretraining checkpoints: set checkpoint path to load architecture
-        # For fine-tuning checkpoints: don't set checkpoint (will create from args)
-        is_finetune_checkpoint = checkpoint_path and (
-            hasattr(hparams, 'pretrain_checkpoint_path') or
-            (hasattr(hparams, 'multimodal_embedding_dim') and 
-             hasattr(hparams, 'model') and
-             not hasattr(hparams, 'checkpoint'))
-        )
+        # Detection logic:
+        # - If checkpoint_path is provided AND hparams has 'pretrain_checkpoint_path', 
+        #   it means we're fine-tuning FROM a pretraining checkpoint (current case).
+        #   We should pass the checkpoint to TIPBackbone so it loads the weights.
+        # - If checkpoint_path is provided but NO 'pretrain_checkpoint_path',
+        #   it's a pretraining checkpoint being loaded directly.
+        # - If checkpoint_path is a fine-tuning checkpoint (saved during fine-tuning),
+        #   it would have all architecture params in hparams already.
         
-        if is_finetune_checkpoint:
-            # Fine-tuning checkpoint: has all architecture params, create from args
-            print("✅ Detected fine-tuning checkpoint")
+        if checkpoint_path:
+            # Check if this is a fine-tuning checkpoint (saved during fine-tuning)
+            # by checking if checkpoint_path points to a fine-tuning run directory
+            is_finetune_checkpoint = 'finetune' in str(checkpoint_path) and not hasattr(hparams, 'pretrain_checkpoint_path')
+            
+            if is_finetune_checkpoint:
+                # Fine-tuning checkpoint: has all architecture params, create from args
+                print("✅ Detected fine-tuning checkpoint (saved from previous fine-tuning)")
+                with open_dict(hparams):
+                    hparams.checkpoint = None  # Don't load from checkpoint, create from args
+            else:
+                # Pretraining checkpoint: needs to load architecture and weights from checkpoint
+                print("✅ Detected pretraining checkpoint (loading weights and architecture)")
+                with open_dict(hparams):
+                    hparams.checkpoint = checkpoint_path
+                    print(f"✅ Pretraining checkpoint: {hparams.checkpoint}")
+        else:
+            # No checkpoint: create new model from args
+            print("✅ No checkpoint provided, creating new model from args")
             with open_dict(hparams):
-                hparams.checkpoint = None  # Don't load from checkpoint, create from args
-        elif checkpoint_path:
-            # Pretraining checkpoint: needs to load architecture from checkpoint
-            print("✅ Detected pretraining checkpoint")
-            with open_dict(hparams):
-                hparams.checkpoint = checkpoint_path
+                hparams.checkpoint = None
         
         self.backbone = TIPBackbone(hparams)
         

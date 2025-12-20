@@ -166,33 +166,20 @@ def finetune(hparams, wandb_logger):
     pretrain_hparams = OmegaConf.create(pretrain_checkpoint['hyper_parameters'])
     
     # Merge pretraining hyperparameters (architecture) with fine-tuning hyperparameters (training config)
-    # Architecture params from pretrain take precedence
+    # Strategy: Use fine-tuning config as base, only copy MISSING keys from pretrain checkpoint
+    # Fine-tuning config values take precedence - only fill in missing architecture parameters
     with open_dict(hparams):
-        # Copy architecture hyperparameters from pretraining checkpoint
-        if hasattr(pretrain_hparams, 'multimodal_embedding_dim'):
-            hparams.multimodal_embedding_dim = pretrain_hparams.multimodal_embedding_dim
-        if hasattr(pretrain_hparams, 'embedding_dim'):
-            hparams.embedding_dim = pretrain_hparams.embedding_dim
-        if hasattr(pretrain_hparams, 'tabular_embedding_dim'):
-            hparams.tabular_embedding_dim = pretrain_hparams.tabular_embedding_dim
-        if hasattr(pretrain_hparams, 'multimodal_transformer_num_layers'):
-            hparams.multimodal_transformer_num_layers = pretrain_hparams.multimodal_transformer_num_layers
-        if hasattr(pretrain_hparams, 'tabular_transformer_num_layers'):
-            hparams.tabular_transformer_num_layers = pretrain_hparams.tabular_transformer_num_layers
-        if hasattr(pretrain_hparams, 'num_cat'):
-            hparams.num_cat = pretrain_hparams.num_cat
-        if hasattr(pretrain_hparams, 'num_con'):
-            hparams.num_con = pretrain_hparams.num_con
-        if hasattr(pretrain_hparams, 'model'):
-            hparams.model = pretrain_hparams.model
-        if hasattr(pretrain_hparams, 'use_satellite_encoder'):
-            hparams.use_satellite_encoder = pretrain_hparams.use_satellite_encoder
-        if hasattr(pretrain_hparams, 'use_satlas'):
-            hparams.use_satlas = pretrain_hparams.use_satlas
-        if hasattr(pretrain_hparams, 'sentinel2_model_id'):
-            hparams.sentinel2_model_id = pretrain_hparams.sentinel2_model_id
-        if hasattr(pretrain_hparams, 'satellite_feature_dim'):
-            hparams.satellite_feature_dim = pretrain_hparams.satellite_feature_dim
+        # Convert pretrain to dict for iteration
+        pretrain_dict = OmegaConf.to_container(pretrain_hparams, resolve=True)
+        
+        # Copy only missing keys from pretrain checkpoint (fine-tuning config takes precedence)
+        for key, value in pretrain_dict.items():
+            # Skip checkpoint path - we'll set it separately
+            if key == 'checkpoint':
+                continue
+            # Only copy if key is missing in fine-tuning config
+            if not hasattr(hparams, key) or key not in hparams:
+                setattr(hparams, key, value)
         
         # Store original pretraining checkpoint path (for reference, not for loading)
         hparams.pretrain_checkpoint_path = hparams.checkpoint
