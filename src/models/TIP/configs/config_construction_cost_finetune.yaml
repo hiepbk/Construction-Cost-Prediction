@@ -64,26 +64,36 @@ missing_tabular: false
 
 # Regression Head
 num_classes: 1
-# regression_loss must be a dict with loss names and weights
-# Only losses in this dict will contribute to the total weighted loss for backprop
-# All losses (rmsle, mae, rmse, mse, huber) are calculated internally for monitoring
-regression_loss:
-  rmsle: 1.0  # Primary metric (competition)
-  # mae: 0.2    # Interpretable error
-  # mse: 0.2    # Penalize large errors
-  # rmse: 0.1   # Root mean squared error
-huber_delta: 1.0  # Only used if huber is in regression_loss
-target_log_transform: true
-target_mean: 6.513477  # From preprocessing (log space) - must match pretrain config
-target_std: 1.101045   # From preprocessing (log space) - must match pretrain config
+# Regression Head Configuration (all head-related parameters in one dict)
+regression_head:
+  type: MixtureOfExpertsRegression  # Head class: RegressionMLP or MixtureOfExpertsRegression
+  p: 0.2  # Dropout probability
+  n_hidden: null  # Hidden dimension (null = use n_input, which is embedding_dim)
+  # Loss configuration (dict with loss names and weights)
+  # Only losses in this dict will contribute to the total weighted loss for backprop
+  # All losses (rmsle, mae, rmse, mse, huber) are calculated internally for monitoring
+  loss_type:
+    rmsle: 1.0  # Primary metric (competition)
+    # mae: 0.2    # Interpretable error
+    # mse: 0.2    # Penalize large errors
+    # rmse: 0.1   # Root mean squared error
+  target_mean: 6.513477  # From preprocessing (log space) - must match pretrain config
+  target_std: 1.101045   # From preprocessing (log space) - must match pretrain config
+  target_log_transform: true
+  huber_delta: 1.0  # Delta parameter for Huber loss
+  # MoE-specific parameters:
+  num_experts: 8  # Number of expert networks
+  top_k: 2  # Top-K routing: number of experts to use per sample
+  use_load_balancing: false  # Enable load balancing loss
+  load_balancing_weight: 0.01  # Weight for load balancing loss
 
 # Training
-batch_size: 16
+batch_size: 32
 lr: 3e-4  # Pretrain LR (not used in fine-tuning, but required by run.py)
 weight_decay: 1e-5  # Pretrain weight decay (not used in fine-tuning, but required by run.py)
 lr_eval: 1e-4  # Fine-tuning learning rate (used for regression head)
 weight_decay_eval: 1e-5  # Fine-tuning weight decay
-max_epochs: 50
+max_epochs: 200
 log_every_n_steps: 1  # Log every step (since we have small number of batches ~13)
 
 # TIP Loss Parameters (not used in fine-tuning, but required by run.py)
@@ -93,8 +103,6 @@ replace_special_rate: 0.0  # Not used during fine-tuning
 check_val_every_n_epoch: 1
 val_check_interval: 1.0  # Check validation every epoch
 eval_metric: rmsle  # Metric to monitor for best checkpoint (rmsle, mae, rmse) - rmsle is primary
-regression_head_class: RegressionMLP  # Head class name from ConstructionCostHead module (must match class name exactly)
-regression_head_dropout: 0.2  # Dropout probability for regression head
 limit_train_batches: null  # Use all training batches
 limit_val_batches: null  # Use all validation batches
 limit_test_batches: null  # Use all test batches

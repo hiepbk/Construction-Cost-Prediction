@@ -17,6 +17,8 @@ import torch.nn as nn
 from omegaconf import OmegaConf, open_dict, DictConfig
 from models.Tip_utils.Tip_downstream import TIPBackbone
 from models.ConstructionCostHead import create_head
+from omegaconf import DictConfig, OmegaConf
+from typing import Dict
 
 
 class ConstructionCostPrediction(nn.Module):
@@ -134,6 +136,16 @@ class ConstructionCostPrediction(nn.Module):
     
     def _load_head_from_checkpoint(self, checkpoint, hparams, is_finetune_checkpoint):
         """Load head from checkpoint (backbone already loaded by TIPBackbone)."""
+        # Always create head from current config first
+        head_config = self._build_head_config(hparams)
+        z_dim = hparams.multimodal_embedding_dim
+        self.regression = create_head(
+            head_config=head_config,
+            n_input=z_dim
+        )
+        current_head_type = head_config.get('type', 'Unknown')
+        
+        # Optionally try to load weights from checkpoint (if available and head class matches)
         if is_finetune_checkpoint:
             # Fine-tuning checkpoint: Extract head weights from state_dict
             print("Loading regression head weights from fine-tuning checkpoint state_dict...")
@@ -148,136 +160,79 @@ class ConstructionCostPrediction(nn.Module):
                     regression_state_dict[regression_key] = value
             
             if regression_state_dict:
-                # Get head class from checkpoint hyperparameters
-                regression_head_class = getattr(hparams, 'regression_head_class', 'RegressionMLP')
-                print(f"✅ Using regression head class from checkpoint: {regression_head_class}")
-                
-                # Create head with correct architecture
-                z_dim = hparams.multimodal_embedding_dim
-                hidden_dim = getattr(hparams, 'embedding_dim', z_dim)
-                drop_p = getattr(hparams, 'regression_head_dropout', 0.2)
-                
-                # Get target normalization parameters from hparams
-                target_mean = getattr(hparams, 'target_mean', 0.0)
-                target_std = getattr(hparams, 'target_std', 1.0)
-                target_log_transform = getattr(hparams, 'target_log_transform', True)
-                loss_type = getattr(hparams, 'regression_loss', {'rmsle': 1.0})
-                huber_delta = getattr(hparams, 'huber_delta', 1.0)
-                
-                # Preprocess loss_type: convert DictConfig to dict before passing to head
-                if isinstance(loss_type, DictConfig):
-                    loss_type = dict(loss_type)
-                
-                # Create regression head (always named self.regression)
-                self.regression = create_head(
-                    head_name=regression_head_class,
-                    n_input=z_dim,
-                    loss_type=loss_type,
-                    n_hidden=hidden_dim,
-                    p=drop_p,
-                    target_mean=target_mean,
-                    target_std=target_std,
-                    target_log_transform=target_log_transform,
-                    huber_delta=huber_delta
-                )
-                
-                # Load head weights
-                self.regression.load_state_dict(regression_state_dict)
-                print("✅ Loaded regression head weights from fine-tuning checkpoint")
+                try:
+                    self.regression.load_state_dict(regression_state_dict)
+                    print("✅ Loaded regression head weights from fine-tuning checkpoint")
+                except Exception as e:
+                    print(f"⚠️  Warning: Could not load regression head weights: {e}")
+                    print(f"   Continuing with random initialization for '{current_head_type}' head.")
             else:
-                print("⚠️  Warning: No regression head weights found in fine-tuning checkpoint state_dict")
-                print("   Creating new regression head from hparams")
-                self._create_head_from_hparams(hparams)
+                print(f"ℹ️  No regression head weights found in fine-tuning checkpoint state_dict")
+                print(f"   Using '{current_head_type}' head initialized from config (random weights)")
         else:
-            # Pretraining checkpoint: Head is in callback state
-            print("Loading regression head from pretraining checkpoint callback state...")
-            
+            # Pretraining checkpoint: Head is in callback state (optional)
             if 'callbacks' in checkpoint:
                 # Find the SSLOnlineEvaluatorRegression callback state
                 for key in checkpoint['callbacks'].keys():
                     if 'SSLOnlineEvaluatorRegression' in key or 'ssl_online_regression' in key.lower():
                         callback_state = checkpoint['callbacks'][key]
                         if 'state_dict' in callback_state:
-                            try:
-                                # Get head class name from callback state
-                                callback_head_class = callback_state.get('regression_head_class', 'RegressionMLP')
-                                print(f"✅ Found online regression head class: {callback_head_class}")
-                                
-                                # Create head using the class from callback state
-                                z_dim = hparams.multimodal_embedding_dim
-                                hidden_dim = getattr(hparams, 'embedding_dim', z_dim)
-                                drop_p = getattr(hparams, 'regression_head_dropout', 0.2)
-                                
-                                # Get target normalization parameters from hparams
-                                target_mean = getattr(hparams, 'target_mean', 0.0)
-                                target_std = getattr(hparams, 'target_std', 1.0)
-                                target_log_transform = getattr(hparams, 'target_log_transform', True)
-                                loss_type = getattr(hparams, 'regression_loss', {'rmsle': 1.0})
-                                huber_delta = getattr(hparams, 'huber_delta', 1.0)
-                                
-                                # Preprocess loss_type: convert DictConfig to dict before passing to head
-                                if isinstance(loss_type, DictConfig):
-                                    loss_type = dict(loss_type)
-                                
-                                # Create regression head (always named self.regression)
-                                self.regression = create_head(
-                                    head_name=callback_head_class,
-                                    n_input=z_dim,
-                                    loss_type=loss_type,
-                                    n_hidden=hidden_dim,
-                                    p=drop_p,
-                                    target_mean=target_mean,
-                                    target_std=target_std,
-                                    target_log_transform=target_log_transform,
-                                    huber_delta=huber_delta
-                                )
-                                
-                                # Load the trained weights from pretraining
-                                self.regression.load_state_dict(callback_state['state_dict'])
-                                print("✅ Loaded trained regression head from pretraining checkpoint")
-                                return  # Successfully loaded, exit
-                            except Exception as e:
-                                print(f"⚠️  Warning: Could not load regression head: {e}")
-                                import traceback
-                                traceback.print_exc()
+                            # Get head class name from callback state (what was used in pretraining)
+                            callback_head_class = callback_state.get('regression_head_class', 'RegressionMLP')
+                            print(f"✅ Found online regression head class in pretraining checkpoint: {callback_head_class}")
+                            
+                            # Check if checkpoint's head class matches current config's head class
+                            if callback_head_class == current_head_type:
+                                # Head types match - try to load weights
+                                try:
+                                    self.regression.load_state_dict(callback_state['state_dict'])
+                                    print("✅ Loaded trained regression head from pretraining checkpoint")
+                                except Exception as e:
+                                    print(f"⚠️  Warning: Could not load regression head weights (dimension mismatch): {e}")
+                                    print(f"   Continuing with random initialization for '{current_head_type}' head.")
+                            else:
+                                # Head types don't match - don't load weights, use new head from scratch
+                                print(f"ℹ️  NOTE: Pretraining checkpoint used '{callback_head_class}' head, but fine-tuning uses '{current_head_type}' head.")
+                                print(f"   This is expected when changing head architectures (e.g., RegressionMLP → MixtureOfExpertsRegression).")
+                                print(f"   ✅ TIP backbone weights loaded successfully - this is the most important part.")
+                                print(f"   ℹ️  Starting fine-tuning with new '{current_head_type}' head (random initialization).")
+                            return  # Done (either loaded or skipped)
             
-            # If we get here, no head was loaded from callback
-            print("⚠️  WARNING: No regression head found in pretraining checkpoint callback state!")
-            print("   Creating new regression head from hparams (random weights)")
-            print("   This will result in poor performance")
-            self._create_head_from_hparams(hparams)
+            # If no callback state found, head is already created from config (random init)
+            print(f"ℹ️  No regression head found in pretraining checkpoint callback state")
+            print(f"   Using '{current_head_type}' head initialized from config (random weights)")
+    
+    def _build_head_config(self, hparams) -> Dict:
+        """Get head_config dict directly from hparams.regression_head (no fallback)."""
+        # Get regression_head dict from hparams
+        if not (hasattr(hparams, 'regression_head') or 'regression_head' in hparams):
+            raise ValueError("hparams must contain 'regression_head' dict with all head configuration")
+        
+        head_config = getattr(hparams, 'regression_head', hparams.get('regression_head', {}))
+        if isinstance(head_config, DictConfig):
+            head_config = OmegaConf.to_container(head_config, resolve=True)
+        
+        if not isinstance(head_config, dict):
+            raise ValueError(f"regression_head must be a dict, got {type(head_config)}")
+        
+        if 'type' not in head_config:
+            raise ValueError("regression_head must contain 'type' key specifying head class name")
+        
+        # Return as-is (all parameters should be in regression_head, no defaults)
+        return head_config.copy()
     
     def _create_head_from_hparams(self, hparams):
         """Create head from hyperparameters (when no checkpoint available)."""
-        regression_head_class = getattr(hparams, 'regression_head_class', 'RegressionMLP')
-        print(f"Creating regression head from hparams: {regression_head_class}")
+        head_config = self._build_head_config(hparams)
+        head_type = head_config.get('type', 'RegressionMLP')
+        print(f"Creating regression head from hparams: {head_type}")
         
         z_dim = hparams.multimodal_embedding_dim
-        hidden_dim = getattr(hparams, 'embedding_dim', z_dim)
-        drop_p = getattr(hparams, 'regression_head_dropout', 0.2)
-        
-        # Get target normalization parameters from hparams
-        target_mean = getattr(hparams, 'target_mean', 0.0)
-        target_std = getattr(hparams, 'target_std', 1.0)
-        target_log_transform = getattr(hparams, 'target_log_transform', True)
-        loss_type = getattr(hparams, 'regression_loss', {'rmsle': 1.0})
-        huber_delta = getattr(hparams, 'huber_delta', 1.0)
-        
-        # Preprocess loss_type: convert DictConfig to dict before passing to head
-        if isinstance(loss_type, DictConfig):
-            loss_type = dict(loss_type)
         
         # Create regression head (separate from backbone)
         self.regression = create_head(
-            head_name=regression_head_class,
-            n_input=z_dim,
-            loss_type=loss_type,
-            n_hidden=hidden_dim,
-            p=drop_p,
-            target_mean=target_mean,
-            target_std=target_std,
-            target_log_transform=target_log_transform,
-            huber_delta=huber_delta
+            head_config=head_config,
+            n_input=z_dim
         )
     
     def forward(self, x, visualize=False):

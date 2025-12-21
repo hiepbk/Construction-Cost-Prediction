@@ -7,6 +7,7 @@ to ensure consistency.
 
 Available heads:
 - RegressionMLP: Simple MLP with BatchNorm and Dropout
+- MixtureOfExpertsRegression: Sparse MoE with Top-K routing for automatic pattern discovery
 """
 from typing import Optional, Dict, Tuple
 import torch
@@ -123,6 +124,7 @@ class RegressionMLP(nn.Module):
                 - 'loss': (scalar) - Loss value (if targets provided)
                 - 'loss_dict': dict - Dictionary of loss components (if targets provided)
         """
+        # (B, 20, 512) -> (B, 512)
         # Aggregate all tokens using mean pooling
         if x.dim() == 3:
             # x is (B, N, n_input) - aggregate over sequence dimension
@@ -252,9 +254,362 @@ class RegressionMLP(nn.Module):
         return loss_dict
 
 
+class MixtureOfExpertsRegression(nn.Module):
+    """
+    Mixture of Experts (MoE) regression head with Top-K routing.
+    Automatically discovers multiple patterns in the data by routing samples
+    to specialized expert networks.
+    
+    Architecture:
+    - Input: (B, N, n_input) where N is sequence length (e.g., 20 tokens)
+    - Aggregation: Mean pooling over sequence dimension -> (B, n_input)
+    - Gating Network: Linear(n_input -> n_input//2) -> ReLU -> Linear(n_input//2 -> num_experts) -> Softmax
+    - Top-K Routing: Select top K experts, zero others, renormalize
+    - K Expert MLPs: Each MLP(n_input -> n_hidden -> n_hidden//2 -> 1)
+    - Weighted Sum: Σ(weight_i * expert_i)
+    
+    Args:
+        n_input: Input dimension (embedding size)
+        loss_type: Dict[str, float] - Loss names and weights (e.g., {"rmsle": 0.7, "mae": 0.2, "rmse": 0.1})
+        num_experts: Number of expert networks (default: 8)
+        top_k: Number of experts to route to per sample (default: 2)
+        n_hidden: Hidden dimension for experts (default: n_input)
+        p: Dropout probability (default: 0.2)
+        target_mean: Mean for target normalization (default: 0.0)
+        target_std: Std for target normalization (default: 1.0)
+        target_log_transform: Whether target is log-transformed (default: True)
+        huber_delta: Delta parameter for Huber loss (default: 1.0)
+        use_load_balancing: Whether to add load balancing loss (default: False)
+        load_balancing_weight: Weight for load balancing loss (default: 0.01)
+    """
+    def __init__(
+        self,
+        n_input: int,
+        loss_type: Dict[str, float],
+        num_experts: int = 8,
+        top_k: int = 2,
+        n_hidden: Optional[int] = None,
+        p: float = 0.2,
+        target_mean: float = 0.0,
+        target_std: float = 1.0,
+        target_log_transform: bool = True,
+        huber_delta: float = 1.0,
+        use_load_balancing: bool = False,
+        load_balancing_weight: float = 0.01,
+    ):
+        super().__init__()
+        n_hidden = n_hidden or n_input
+        
+        # Validate top_k
+        if top_k > num_experts:
+            raise ValueError(f"top_k ({top_k}) must be <= num_experts ({num_experts})")
+        if top_k < 1:
+            raise ValueError(f"top_k ({top_k}) must be >= 1")
+        
+        # Store MoE-specific parameters
+        self.num_experts = num_experts
+        self.top_k = top_k
+        self.use_load_balancing = use_load_balancing
+        self.load_balancing_weight = load_balancing_weight
+        
+        # Store target normalization parameters
+        self.target_mean = target_mean
+        self.target_std = target_std
+        self.target_log_transform = target_log_transform
+        self.huber_delta = huber_delta
+        
+        # loss_type must be dict (multi-loss with weights) - no string support
+        # Convert DictConfig to regular dict if needed
+        if isinstance(loss_type, DictConfig):
+            loss_type = dict(loss_type)
+        
+        # Now loss_type must be a regular dict
+        if not isinstance(loss_type, dict):
+            raise ValueError(f"loss_type must be dict or DictConfig, got {type(loss_type)}. Example: {{'rmsle': 0.7, 'mae': 0.2, 'rmse': 0.1}}")
+        
+        # Store loss config (which losses to use and their weights)
+        self.loss_config = loss_type.copy()
+        
+        # Normalize weights to sum to 1.0 (optional, but good practice)
+        total_weight = sum(self.loss_config.values())
+        if total_weight > 0:
+            self.loss_config = {k: v / total_weight for k, v in self.loss_config.items()}
+        
+        # Store primary loss name for backward compatibility
+        self.loss_type = list(self.loss_config.keys())[0] if self.loss_config else 'rmsle'
+        
+        # Gating network: learns to route samples to experts
+        self.gating = nn.Sequential(
+            nn.Linear(n_input, n_input // 2),
+            nn.ReLU(inplace=True),
+            nn.Linear(n_input // 2, num_experts),
+            # Softmax will be applied in forward pass
+        )
+        
+        # Expert networks: each specializes in different patterns
+        self.experts = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(n_input, n_hidden),
+                nn.BatchNorm1d(n_hidden),
+                nn.ReLU(inplace=True),
+                nn.Dropout(p),
+                nn.Linear(n_hidden, n_hidden // 2),
+                nn.BatchNorm1d(n_hidden // 2),
+                nn.ReLU(inplace=True),
+                nn.Dropout(p),
+                nn.Linear(n_hidden // 2, 1)  # Single output for regression
+            )
+            for _ in range(num_experts)
+        ])
+        
+        # Initialize loss functions for ALL possible losses (for monitoring)
+        # We calculate all losses, but only weight those in loss_config
+        self.loss_fns = {
+            'huber': nn.HuberLoss(delta=huber_delta),
+            'mae': nn.L1Loss(),
+            'mse': nn.MSELoss(),
+            'rmsle': None,  # RMSLE is computed manually
+            'rmse': None,   # RMSE is computed from MSE (sqrt of MSE)
+        }
+        
+        # Validate that all losses in config are supported
+        for loss_name in self.loss_config.keys():
+            if loss_name not in self.loss_fns:
+                raise ValueError(f"Unknown loss type: {loss_name}. Supported: 'rmsle', 'huber', 'mae', 'mse', 'rmse'")
+    
+    def _top_k_routing(self, weights: Tensor) -> Tensor:
+        """
+        Top-K routing: select top K experts, zero others, renormalize.
+        Uses straight-through estimator for differentiability.
+        
+        Args:
+            weights: (B, num_experts) - Gating network output (before softmax)
+        
+        Returns:
+            (B, num_experts) - Sparse weights (only top K non-zero, normalized)
+        """
+        # Apply softmax to get probabilities
+        probs = torch.softmax(weights, dim=-1)  # (B, num_experts)
+        
+        # Get top K indices and values
+        topk_values, topk_indices = torch.topk(probs, k=self.top_k, dim=-1)  # (B, K)
+        
+        # Create sparse weights: zero out non-top-K, keep top-K
+        sparse_weights = torch.zeros_like(probs)
+        sparse_weights.scatter_(-1, topk_indices, topk_values)
+        
+        # Renormalize to ensure sum = 1
+        sparse_weights = sparse_weights / (sparse_weights.sum(dim=-1, keepdim=True) + 1e-8)
+        
+        return sparse_weights
+    
+    def _load_balancing_loss(self, weights: Tensor) -> Tensor:
+        """
+        Calculate load balancing loss to encourage uniform expert usage.
+        
+        Args:
+            weights: (B, num_experts) - Routing weights (after top-K)
+        
+        Returns:
+            (scalar) - Load balancing loss (variance of expert usage)
+        """
+        # Average usage per expert across batch
+        expert_usage = weights.mean(dim=0)  # (num_experts,)
+        
+        # Target: uniform distribution (1/num_experts per expert)
+        target_usage = torch.ones_like(expert_usage) / self.num_experts
+        
+        # Loss: encourage uniform usage (minimize variance)
+        # Use KL divergence or MSE between actual and uniform
+        load_balance_loss = torch.mean((expert_usage - target_usage) ** 2)
+        
+        return load_balance_loss
+    
+    def forward(
+        self, 
+        x: Tensor, 
+        target: Optional[Tensor] = None,
+        target_original: Optional[Tensor] = None
+    ) -> Dict[str, Tensor]:
+        """
+        Forward pass.
+        
+        Args:
+            x: (B, N, n_input) - Multimodal features (sequence of tokens)
+            target: Optional (B,) - Target in normalized log space (for loss calculation)
+            target_original: Optional (B,) - Target in original scale USD/m² (for RMSLE loss)
+        
+        Returns:
+            dict with keys:
+                - 'prediction_log': (B,) - Prediction in normalized log space
+                - 'prediction_original': (B,) - Prediction in original scale (USD/m²)
+                - 'loss': (scalar) - Loss value (if targets provided)
+                - 'loss_dict': dict - Dictionary of loss components (if targets provided)
+                - 'expert_weights': (B, num_experts) - Routing weights (if targets provided, for monitoring)
+        """
+        # (B, 20, 512) -> (B, 512)
+        # Aggregate all tokens using mean pooling
+        if x.dim() == 3:
+            # x is (B, N, n_input) - aggregate over sequence dimension
+            x_pooled = x.mean(dim=1)  # (B, N, n_input) -> (B, n_input)
+        else:
+            # If x is already (B, n_input), pass through directly
+            x_pooled = x
+        
+        # Gating network: compute routing weights
+        gating_logits = self.gating(x_pooled)  # (B, num_experts)
+        
+        # Top-K routing: select top K experts
+        expert_weights = self._top_k_routing(gating_logits)  # (B, num_experts)
+        
+        # Process through all experts (in parallel)
+        expert_outputs = []
+        for expert in self.experts:
+            expert_out = expert(x_pooled)  # (B, 1)
+            expert_outputs.append(expert_out)
+        
+        # Stack expert outputs: (B, num_experts, 1)
+        expert_outputs = torch.stack(expert_outputs, dim=1)  # (B, num_experts, 1)
+        
+        # Weighted sum: Σ(weight_i * expert_i)
+        # expert_weights: (B, num_experts), expert_outputs: (B, num_experts, 1)
+        prediction_log = (expert_weights.unsqueeze(-1) * expert_outputs).sum(dim=1).squeeze(-1)  # (B,)
+        
+        # Decode to original scale
+        prediction_original = self.construction_cost_decode(prediction_log)
+        
+        # Prepare result dict
+        result = {
+            'prediction_log': prediction_log,
+            'prediction_original': prediction_original,
+        }
+        
+        # Calculate loss if targets are provided
+        if target is not None or target_original is not None:
+            loss_dict = self.calculate_loss(
+                prediction_log=prediction_log,
+                prediction_original=prediction_original,
+                target=target,
+                target_original=target_original
+            )
+            
+            # Add load balancing loss if enabled
+            if self.use_load_balancing:
+                load_balance_loss = self._load_balancing_loss(expert_weights)
+                loss_dict['load_balancing'] = load_balance_loss
+                # Add to total loss (with weight)
+                loss_dict['total'] = loss_dict['total'] + self.load_balancing_weight * load_balance_loss
+            
+            result['loss'] = loss_dict['total']
+            result['loss_dict'] = loss_dict
+            result['expert_weights'] = expert_weights  # For monitoring
+        
+        return result
+    
+    def construction_cost_decode(self, prediction_log: Tensor) -> Tensor:
+        """
+        Decode prediction from normalized log space to original scale (USD/m²).
+        Same as RegressionMLP.
+        
+        Args:
+            prediction_log: (B,) - Prediction in normalized log space
+        
+        Returns:
+            (B,) - Prediction in original scale (USD/m²), clamped to >= 0
+        """
+        # Step 1: Denormalize (reverse normalization)
+        pred_log = prediction_log * self.target_std + self.target_mean
+        
+        # Step 2: Reverse log-transform to get original scale
+        if self.target_log_transform:
+            pred_original = torch.expm1(pred_log)  # exp(x) - 1
+        else:
+            pred_original = pred_log
+        
+        # Ensure non-negative (construction cost can't be negative)
+        pred_original = torch.clamp(pred_original, min=0.0)
+        
+        return pred_original
+    
+    def calculate_loss(
+        self,
+        prediction_log: Tensor,
+        prediction_original: Tensor,
+        target: Optional[Tensor] = None,
+        target_original: Optional[Tensor] = None
+    ) -> Dict[str, Tensor]:
+        """
+        Calculate ALL losses internally, but only weight those in loss_config.
+        Same as RegressionMLP.
+        
+        Args:
+            prediction_log: (B,) - Prediction in normalized log space
+            prediction_original: (B,) - Prediction in original scale (USD/m²)
+            target: Optional (B,) - Target in normalized log space (not used, kept for compatibility)
+            target_original: Optional (B,) - Target in original scale (USD/m²)
+        
+        Returns:
+            dict with keys:
+                - 'total': (scalar) - Total weighted loss (for backprop, only losses in loss_config)
+                - 'rmsle': (scalar) - RMSLE loss (always calculated)
+                - 'huber': (scalar) - Huber loss (always calculated)
+                - 'mae': (scalar) - MAE loss (always calculated)
+                - 'mse': (scalar) - MSE loss (always calculated)
+                - 'rmse': (scalar) - RMSE loss (always calculated, sqrt of MSE)
+        """
+        loss_dict = {}
+        total_loss = 0.0
+        
+        # Ensure target_original is available (required for all losses)
+        if target_original is None:
+            raise ValueError("target_original is required for loss calculation")
+        
+        # Ensure non-negative
+        pred_original = torch.clamp(prediction_original, min=0.0)
+        tgt_original = torch.clamp(target_original, min=0.0)
+        
+        # Calculate ALL losses (for monitoring)
+        
+        # 1. RMSLE: sqrt(mean((log1p(y_true_orig) - log1p(y_pred_orig))^2))
+        log_pred = torch.log1p(pred_original)  # log(1 + y_pred)
+        log_true = torch.log1p(tgt_original)   # log(1 + y_true)
+        squared_log_error = (log_true - log_pred) ** 2
+        rmsle = torch.sqrt(torch.mean(squared_log_error))
+        loss_dict['rmsle'] = rmsle
+        
+        # 2. Huber loss on original scale
+        huber = self.loss_fns['huber'](pred_original.squeeze(), tgt_original.squeeze())
+        loss_dict['huber'] = huber
+        
+        # 3. MAE (L1) loss on original scale
+        mae = self.loss_fns['mae'](pred_original.squeeze(), tgt_original.squeeze())
+        loss_dict['mae'] = mae
+        
+        # 4. MSE (L2) loss on original scale
+        mse = self.loss_fns['mse'](pred_original.squeeze(), tgt_original.squeeze())
+        loss_dict['mse'] = mse
+        
+        # Calculate RMSE from MSE (for monitoring)
+        rmse = torch.sqrt(mse)
+        loss_dict['rmse'] = rmse
+        
+        # Calculate total weighted loss (only losses in loss_config contribute)
+        for loss_name, weight in self.loss_config.items():
+            if loss_name in loss_dict:
+                total_loss = total_loss + weight * loss_dict[loss_name]
+            else:
+                raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
+        
+        # Store total weighted loss
+        loss_dict['total'] = total_loss
+        
+        return loss_dict
+
+
 # Registry of available head classes
 HEAD_REGISTRY = {
     'RegressionMLP': RegressionMLP,
+    'MixtureOfExpertsRegression': MixtureOfExpertsRegression,
     # Add more head classes here in the future
     # 'RegressionTransformer': RegressionTransformer,
     # 'RegressionResNet': RegressionResNet,
@@ -284,60 +639,57 @@ def get_head_class(head_name: str):
 
 
 def create_head(
-    head_name: str, 
+    head_config: Dict,
     n_input: int,
-    loss_type: Dict[str, float],  # Dict with loss names and weights
-    n_hidden: Optional[int] = None, 
-    p: float = 0.2,
-    target_mean: float = 0.0,
-    target_std: float = 1.0,
-    target_log_transform: bool = True,
-    huber_delta: float = 1.0,
-    **kwargs
 ):
     """
-    Create a head instance by name.
+    Create a head instance from configuration dict.
     
     Args:
-        head_name: Name of the head class (e.g., 'RegressionMLP')
-        n_input: Input dimension
-        n_hidden: Hidden dimension (optional, depends on head)
-        p: Dropout probability (optional, depends on head)
-        target_mean: Mean for target normalization (default: 0.0)
-        target_std: Std for target normalization (default: 1.0)
-        target_log_transform: Whether target is log-transformed (default: True)
-        loss_type: Loss function type - must be dict (multi-loss with weights), e.g., {"rmsle": 0.7, "mae": 0.2, "rmse": 0.1}
-                   Can also be OmegaConf DictConfig (will be converted to dict automatically)
-        huber_delta: Delta parameter for Huber loss (default: 1.0)
-        **kwargs: Additional arguments for head initialization
+        head_config: Dict containing all head configuration:
+            - type: str - Head class name (e.g., 'RegressionMLP', 'MixtureOfExpertsRegression')
+            - loss_type: Dict[str, float] - Loss names and weights (e.g., {"rmsle": 0.7, "mae": 0.2})
+            - target_mean: float - Mean for target normalization (default: 0.0)
+            - target_std: float - Std for target normalization (default: 1.0)
+            - target_log_transform: bool - Whether target is log-transformed (default: True)
+            - huber_delta: float - Delta parameter for Huber loss (default: 1.0)
+            - n_hidden: Optional[int] - Hidden dimension (default: n_input)
+            - p: float - Dropout probability (default: 0.2)
+            - ... (any head-specific parameters, e.g., num_experts, top_k for MoE)
+        n_input: int - Input dimension (embedding size)
     
     Returns:
         Head instance
     """
-    # Preprocess loss_type: convert DictConfig to dict before passing to head
-    if isinstance(loss_type, DictConfig):
-        loss_type = dict(loss_type)
+    # Convert DictConfig to dict if needed
+    if isinstance(head_config, DictConfig):
+        head_config = dict(head_config)
     
-    # Ensure loss_type is a dict
-    if not isinstance(loss_type, dict):
-        raise ValueError(f"loss_type must be dict or DictConfig, got {type(loss_type)}")
+    if not isinstance(head_config, dict):
+        raise ValueError(f"head_config must be dict or DictConfig, got {type(head_config)}")
     
+    # Extract head type (required)
+    head_name = head_config.get('type')
+    if not head_name:
+        raise ValueError("head_config must contain 'type' key specifying head class name")
+    
+    # Get head class
     head_class = get_head_class(head_name)
+    
+    # Preprocess loss_type: convert DictConfig to dict if needed
+    if 'loss_type' in head_config:
+        if isinstance(head_config['loss_type'], DictConfig):
+            head_config['loss_type'] = dict(head_config['loss_type'])
     
     # Filter kwargs to only include valid arguments for the head class
     import inspect
     sig = inspect.signature(head_class.__init__)
-    valid_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    # Pass all parameters from head_config via **kwargs (except 'type')
+    valid_kwargs = {k: v for k, v in head_config.items() if k != 'type' and k in sig.parameters}
     
+    # Create head instance - pass all parameters via **kwargs directly
     return head_class(
         n_input=n_input,
-        loss_type=loss_type,
-        n_hidden=n_hidden, 
-        p=p,
-        target_mean=target_mean,
-        target_std=target_std,
-        target_log_transform=target_log_transform,
-        huber_delta=huber_delta,
         **valid_kwargs
     )
 

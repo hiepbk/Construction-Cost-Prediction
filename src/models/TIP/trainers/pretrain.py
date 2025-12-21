@@ -3,7 +3,7 @@ from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from omegaconf import open_dict
+from omegaconf import open_dict, DictConfig, OmegaConf
 import os
 import pandas as pd
 import numpy as np
@@ -291,27 +291,23 @@ def _pretrain_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     
     # Use regression evaluator for regression tasks (num_classes=1)
     if hparams.num_classes == 1:
-      # Use target normalization stats from config only (user must set these after preprocessing)
-      target_mean = getattr(hparams, 'target_mean', 0.0)
-      target_std = getattr(hparams, 'target_std', 1.0)
-      if target_mean == 0.0 and target_std == 1.0:
-        print(f"⚠️  WARNING: target_mean and target_std are still defaults (0.0, 1.0)")
-        print(f"   Please set them in config file after running preprocessing!")
-      else:
-        print(f"Using target stats from config: mean={target_mean:.4f}, std={target_std:.4f}")
+      # Get regression_head config directly from hparams (no fallback)
+      if not (hasattr(hparams, 'regression_head') or 'regression_head' in hparams):
+        raise ValueError("hparams must contain 'regression_head' dict with all head configuration")
+      
+      regression_head = getattr(hparams, 'regression_head', hparams.get('regression_head', {}))
+      if isinstance(regression_head, DictConfig):
+        regression_head = OmegaConf.to_container(regression_head, resolve=True)
+      
+      if not isinstance(regression_head, dict) or 'type' not in regression_head:
+        raise ValueError("regression_head must be a dict containing 'type' and all head parameters")
       
       # Regression online evaluation
       callbacks.append(SSLOnlineEvaluatorRegression(
         z_dim=z_dim,
-        hidden_dim=hparams.embedding_dim,
-        regression_loss=getattr(hparams, 'regression_loss', {'rmsle': 1.0}),
-        huber_delta=getattr(hparams, 'huber_delta', 1.0),
-        target_mean=target_mean,
-        target_std=target_std,
-        log_transform_target=getattr(hparams, 'target_log_transform', True),
+        regression_head=regression_head,
         multimodal=(hparams.datatype=='multimodal'),
         strategy=hparams.strategy,
-        regression_head_class=getattr(hparams, 'regression_head_class', 'RegressionMLP')
       ))
     else:
       # Classification online evaluation

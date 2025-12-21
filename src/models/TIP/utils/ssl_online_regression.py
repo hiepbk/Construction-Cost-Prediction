@@ -18,6 +18,7 @@ from pl_bolts.models.self_supervised.evaluator import SSLEvaluator
 
 # Import head classes from ConstructionCostHead module
 from models.ConstructionCostHead import get_head_class, create_head
+from omegaconf import DictConfig, OmegaConf
 
 
 class SSLOnlineEvaluatorRegression(Callback):
@@ -41,28 +42,16 @@ class SSLOnlineEvaluatorRegression(Callback):
     def __init__(
         self,
         z_dim: int,
-        drop_p: float = 0.2,
-        hidden_dim: Optional[int] = None,
-        regression_loss = None,  # Dict with loss names and weights, e.g., {'rmsle': 0.7, 'mae': 0.2}
-        huber_delta: float = 1.0,
-        target_mean: float = 0.0,
-        target_std: float = 1.0,
-        log_transform_target: bool = True,
+        regression_head: Dict,  # Dict containing all head configuration (from hparams.regression_head)
         swav: bool = False,
         multimodal: bool = False,
         strategy: str = None,
-        regression_head_class: str = 'RegressionMLP',  # Head class name from ConstructionCostHead
     ):
         """
         Args:
             z_dim: Representation dimension (embedding size)
-            drop_p: Dropout probability
-            hidden_dim: Hidden dimension for the regression MLP
-            regression_loss: Dict with loss names and weights, e.g., {'rmsle': 0.7, 'mae': 0.2}
-            huber_delta: Delta parameter for Huber loss
-            target_mean: Mean of normalized targets (for denormalization)
-            target_std: Std of normalized targets (for denormalization)
-            log_transform_target: Whether targets were log-transformed
+            regression_head: Dict containing all head configuration (from hparams.regression_head)
+                Must contain 'type' and all required parameters for the head class
             swav: Whether using SwAV (affects batch format)
             multimodal: Whether using multimodal data
             strategy: Strategy type ('tip', 'comparison', etc.)
@@ -70,21 +59,26 @@ class SSLOnlineEvaluatorRegression(Callback):
         super().__init__()
         
         self.z_dim = z_dim
-        self.hidden_dim = hidden_dim or z_dim
-        self.drop_p = drop_p
-        self.regression_loss = regression_loss
-        self.huber_delta = huber_delta
-        self.target_mean = target_mean
-        self.target_std = target_std
-        self.log_transform_target = log_transform_target
         self.swav = swav
         self.multimodal = multimodal
         self.strategy = strategy
         
+        # Convert DictConfig to dict if needed
+        if isinstance(regression_head, DictConfig):
+            regression_head = OmegaConf.to_container(regression_head, resolve=True)
+        
+        if not isinstance(regression_head, dict):
+            raise ValueError(f"regression_head must be dict or DictConfig, got {type(regression_head)}")
+        
+        if 'type' not in regression_head:
+            raise ValueError("regression_head must contain 'type' key specifying head class name")
+        
+        self.regression_head_config = regression_head.copy()  # Store full config for checkpoint
+        self.regression_head_class = regression_head['type']  # Store head class name for checkpoint (backward compat)
+        
         self.optimizer: Optional[Optimizer] = None
         self.online_evaluator: Optional[nn.Module] = None  # Can be any head class
         self._recovered_callback_state: Optional[Dict[str, Any]] = None
-        self.regression_head_class = regression_head_class  # Store head class name for checkpoint
         
         # Store validation losses from head for epoch-end aggregation
         # Training and validation losses come from head, so we don't need torchmetrics
@@ -97,23 +91,16 @@ class SSLOnlineEvaluatorRegression(Callback):
     
     def on_fit_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Initialize the regression head and optimizer."""
-        # Create regression head using the specified class from ConstructionCostHead
-        # Pass target normalization parameters and loss type
-        # Preprocess loss_type: convert DictConfig to dict before passing to head
-        loss_type = self.regression_loss
-        if isinstance(loss_type, DictConfig):
-            loss_type = dict(loss_type)
+        # Use regression_head_config directly (all parameters should be in it)
+        head_config = self.regression_head_config.copy()
+        
+        # Preprocess loss_type: convert DictConfig to dict if needed
+        if 'loss_type' in head_config and isinstance(head_config['loss_type'], DictConfig):
+            head_config['loss_type'] = dict(head_config['loss_type'])
         
         self.online_evaluator = create_head(
-            head_name=self.regression_head_class,
-            n_input=self.z_dim,
-            loss_type=loss_type,
-            n_hidden=self.hidden_dim,
-            p=self.drop_p,
-            target_mean=self.target_mean,
-            target_std=self.target_std,
-            target_log_transform=self.log_transform_target,
-            huber_delta=self.huber_delta,
+            head_config=head_config,
+            n_input=self.z_dim
         ).to(pl_module.device)
         
         # Initialize optimizer

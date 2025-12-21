@@ -37,8 +37,16 @@ class ConstructionCostFinetuning(pl.LightningModule):
         # Pass hparams directly (it already contains checkpoint and field_lengths_tabular)
         self.model = ConstructionCostPrediction(hparams=hparams)
         
-        regression_head_class = getattr(hparams, 'regression_head_class', 'RegressionMLP')
-        print(f"✅ ConstructionCostPrediction model created with head: {regression_head_class}")
+        # Get head type for logging
+        if hasattr(hparams, 'regression_head') or 'regression_head' in hparams:
+            head_config = getattr(hparams, 'regression_head', hparams.get('regression_head', {}))
+            if hasattr(head_config, 'type') or (isinstance(head_config, dict) and 'type' in head_config):
+                head_type = getattr(head_config, 'type', head_config.get('type', 'RegressionMLP'))
+            else:
+                head_type = 'RegressionMLP'
+        else:
+            head_type = getattr(hparams, 'regression_head_class', 'RegressionMLP')
+        print(f"✅ ConstructionCostPrediction model created with head: {head_type}")
         
         # Loss configuration is now handled by the head (dict format)
         # No need to set up criterion here - head handles all loss calculation
