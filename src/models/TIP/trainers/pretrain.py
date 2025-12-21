@@ -197,6 +197,9 @@ def pretrain(hparams, wandb_logger):
       print(f"AUTOMATIC K-FOLD: Running all {k_fold} folds sequentially")
       print("="*60)
       
+      # Create base logdir once for all folds (allow existing for subsequent folds)
+      base_logdir = create_logdir('pretrain', hparams.resume_training, wandb_logger, allow_existing=False)
+      
       for fold_idx in range(k_fold):
         print("\n" + "="*60)
         print(f"FOLD {fold_idx + 1}/{k_fold}")
@@ -207,8 +210,8 @@ def pretrain(hparams, wandb_logger):
         with open_dict(hparams):
           hparams.k_fold_current = fold_idx
         
-        # Run training for this fold
-        _pretrain_single_fold(hparams, wandb_logger, fold_idx)
+        # Run training for this fold (pass base_logdir to avoid recreating it)
+        _pretrain_single_fold(hparams, wandb_logger, fold_idx, base_logdir=base_logdir)
       
       print("\n" + "="*60)
       print(f"✅ ALL {k_fold} FOLDS COMPLETE!")
@@ -221,7 +224,7 @@ def pretrain(hparams, wandb_logger):
     _pretrain_single_fold(hparams, wandb_logger, None)
 
 
-def _pretrain_single_fold(hparams, wandb_logger, fold_index):
+def _pretrain_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
   """
   Train a single fold (or fixed split if fold_index is None).
   
@@ -229,6 +232,7 @@ def _pretrain_single_fold(hparams, wandb_logger, fold_index):
     hparams: All hyperparameters
     wandb_logger: Instantiated weights and biases logger
     fold_index: Current fold index (0 to k_fold-1) or None for fixed split
+    base_logdir: Optional base logdir (if provided, will be reused instead of creating new one)
   """
   # Load appropriate dataset
   train_dataset, val_dataset = load_datasets(hparams, fold_index=fold_index)
@@ -251,7 +255,12 @@ def _pretrain_single_fold(hparams, wandb_logger, fold_index):
 
   # Create logdir based on WandB run name
   # Add fold information to logdir if using k-fold
-  base_logdir = create_logdir('pretrain', hparams.resume_training, wandb_logger)
+  if base_logdir is None:
+    base_logdir = create_logdir('pretrain', hparams.resume_training, wandb_logger)
+  else:
+    # Base logdir already exists (from k-fold loop), just ensure it exists
+    os.makedirs(base_logdir, exist_ok=True)
+  
   if fold_index is not None:
     logdir = os.path.join(base_logdir, f'fold_{fold_index}')
     os.makedirs(logdir, exist_ok=True)

@@ -203,6 +203,9 @@ def finetune(hparams, wandb_logger):
             print(f"AUTOMATIC K-FOLD: Running all {k_fold} folds sequentially")
             print("="*60)
             
+            # Create base logdir once for all folds
+            base_logdir = create_logdir('finetune', False, wandb_logger, allow_existing=False)
+            
             for fold_idx in range(k_fold):
                 print("\n" + "="*60)
                 print(f"FOLD {fold_idx + 1}/{k_fold}")
@@ -212,8 +215,8 @@ def finetune(hparams, wandb_logger):
                 with open_dict(hparams):
                     hparams.k_fold_current = fold_idx
                 
-                # Run fine-tuning for this fold
-                _finetune_single_fold(hparams, wandb_logger, fold_idx)
+                # Run fine-tuning for this fold (pass base_logdir to avoid recreating it)
+                _finetune_single_fold(hparams, wandb_logger, fold_idx, base_logdir=base_logdir)
             
             print("\n" + "="*60)
             print(f"✅ ALL {k_fold} FOLDS COMPLETE!")
@@ -226,7 +229,7 @@ def finetune(hparams, wandb_logger):
         _finetune_single_fold(hparams, wandb_logger, None)
 
 
-def _finetune_single_fold(hparams, wandb_logger, fold_index):
+def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     """
     Fine-tune a single fold (or fixed split if fold_index is None).
     
@@ -234,6 +237,7 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index):
         hparams: All hyperparameters
         wandb_logger: Instantiated weights and biases logger
         fold_index: Current fold index (0 to k_fold-1) or None for fixed split
+        base_logdir: Optional base logdir (if provided, will be reused instead of creating new one)
     """
     # Load datasets
     train_dataset, val_dataset = load_datasets(hparams, fold_index=fold_index)
@@ -265,8 +269,12 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index):
     
     # Create logdir based on WandB run name
     # Add fold information to logdir if using k-fold
-    # Use 'multimodal' to match pretrain structure: runs/multimodal/tip_finetune_...
-    base_logdir = create_logdir('finetune', False, wandb_logger)
+    if base_logdir is None:
+        base_logdir = create_logdir('finetune', False, wandb_logger)
+    else:
+        # Base logdir already exists (from k-fold loop), just ensure it exists
+        os.makedirs(base_logdir, exist_ok=True)
+    
     if fold_index is not None:
         logdir = os.path.join(base_logdir, f'fold_{fold_index}')
         os.makedirs(logdir, exist_ok=True)

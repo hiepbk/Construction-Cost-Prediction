@@ -10,7 +10,7 @@ import torch
 from torchvision import transforms
 import numpy as np
 
-def create_logdir(name: str, resume_training: bool, wandb_logger):
+def create_logdir(name: str, resume_training: bool, wandb_logger, allow_existing: bool = False):
   # Get project root: go up 3 levels from src/models/TIP/ to project root
   basepath = os.path.dirname(os.path.abspath(sys.argv[0]))
   # src/models/TIP/ -> src/models/ -> src/ -> project root
@@ -20,7 +20,7 @@ def create_logdir(name: str, resume_training: bool, wandb_logger):
   # basepath = join(os.path.dirname(os.path.abspath(sys.argv[0])),'runs', name)
   run_name = wandb_logger.experiment.name
   logdir = join(basepath,run_name)
-  if os.path.exists(logdir) and not resume_training:
+  if os.path.exists(logdir) and not resume_training and not allow_existing:
     raise Exception(f'Run {run_name} already exists. Please delete the folder {logdir} or choose a different run name.')
   os.makedirs(logdir,exist_ok=True)
   return logdir
