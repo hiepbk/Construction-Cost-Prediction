@@ -118,21 +118,11 @@ def evaluate_validation(
             # Create mask (all ones for no missing values)
             mask = torch.ones_like(x_tabular, dtype=torch.bool).to(device)
             
-            # Forward pass - model predicts in normalized log space
-            pred_normalized = model((x_image, x_tabular, mask))  # (B, 1)
+            # Forward pass - model returns dict with predictions
+            result = model((x_image, x_tabular, mask))  # Returns dict
             
-            # Convert prediction from normalized log space to original scale (USD/m²)
-            # Step 1: Denormalize (reverse normalization)
-            pred_log = (pred_normalized.squeeze() * target_std) + target_mean  # (B,)
-            
-            # Step 2: Reverse log-transform to get original scale
-            if target_log_transform:
-                pred_original = torch.expm1(pred_log)  # exp(x) - 1
-            else:
-                pred_original = pred_log
-            
-            # Ensure non-negative
-            pred_original = torch.clamp(pred_original, min=0.0)
+            # Extract prediction in original scale (already decoded by head)
+            pred_original = result['prediction_original']  # (B,) - original scale (USD/m²)
             
             # Store predictions in original scale
             all_predictions.append(pred_original.cpu())
@@ -257,21 +247,11 @@ def run_inference(
             # Create mask (all ones for no missing values)
             mask = torch.ones_like(x_tabular, dtype=torch.bool).to(device)
             
-            # Forward pass - model predicts in normalized log space
-            pred_normalized = model((x_image, x_tabular, mask))  # (B, 1)
+            # Forward pass - model returns dict with predictions
+            result = model((x_image, x_tabular, mask))  # Returns dict
             
-            # Convert prediction from normalized log space to original scale (USD/m²)
-            # Step 1: Denormalize (reverse normalization)
-            pred_log = (pred_normalized.squeeze() * target_std) + target_mean  # (B,)
-            
-            # Step 2: Reverse log-transform to get original scale
-            if target_log_transform:
-                pred_original = torch.expm1(pred_log)  # exp(x) - 1
-            else:
-                pred_original = pred_log
-            
-            # Ensure non-negative
-            pred_original = torch.clamp(pred_original, min=0.0)
+            # Extract prediction in original scale (already decoded by head)
+            pred_original = result['prediction_original']  # (B,) - original scale (USD/m²)
             
             # Store predictions
             all_predictions.append(pred_original.cpu())

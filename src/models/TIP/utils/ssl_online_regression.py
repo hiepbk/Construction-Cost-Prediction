@@ -12,6 +12,7 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.optim import Optimizer
 import torchmetrics
+from omegaconf import DictConfig
 
 from pl_bolts.models.self_supervised.evaluator import SSLEvaluator
 
@@ -42,7 +43,7 @@ class SSLOnlineEvaluatorRegression(Callback):
         z_dim: int,
         drop_p: float = 0.2,
         hidden_dim: Optional[int] = None,
-        regression_loss: str = 'huber',  # 'huber', 'mse', 'mae', 'rmsle'
+        regression_loss = None,  # Dict with loss names and weights, e.g., {'rmsle': 0.7, 'mae': 0.2}
         huber_delta: float = 1.0,
         target_mean: float = 0.0,
         target_std: float = 1.0,
@@ -57,7 +58,7 @@ class SSLOnlineEvaluatorRegression(Callback):
             z_dim: Representation dimension (embedding size)
             drop_p: Dropout probability
             hidden_dim: Hidden dimension for the regression MLP
-            regression_loss: Loss type ('huber', 'mse', 'mae', 'rmsle')
+            regression_loss: Dict with loss names and weights, e.g., {'rmsle': 0.7, 'mae': 0.2}
             huber_delta: Delta parameter for Huber loss
             target_mean: Mean of normalized targets (for denormalization)
             target_std: Std of normalized targets (for denormalization)
@@ -85,15 +86,9 @@ class SSLOnlineEvaluatorRegression(Callback):
         self._recovered_callback_state: Optional[Dict[str, Any]] = None
         self.regression_head_class = regression_head_class  # Store head class name for checkpoint
         
-        # Regression metrics
-        self.mae_train = None
-        self.rmse_train = None
-        self.rmsle_train = None  # PRIMARY METRIC: Root Mean Squared Logarithmic Error
-        self.r2_train = None
-        self.mae_val = None
-        self.rmse_val = None
-        self.rmsle_val = None  # PRIMARY METRIC: Root Mean Squared Logarithmic Error
-        self.r2_val = None
+        # Store validation losses from head for epoch-end aggregation
+        # Training and validation losses come from head, so we don't need torchmetrics
+        self.val_losses = []  # List of loss_dicts from each validation batch
         
         # Track ALL validation samples by data_id (unique and deterministic)
         self.tracked_val_preds = {}  # Dict: {data_id: prediction_value}
@@ -103,11 +98,22 @@ class SSLOnlineEvaluatorRegression(Callback):
     def on_fit_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Initialize the regression head and optimizer."""
         # Create regression head using the specified class from ConstructionCostHead
+        # Pass target normalization parameters and loss type
+        # Preprocess loss_type: convert DictConfig to dict before passing to head
+        loss_type = self.regression_loss
+        if isinstance(loss_type, DictConfig):
+            loss_type = dict(loss_type)
+        
         self.online_evaluator = create_head(
             head_name=self.regression_head_class,
             n_input=self.z_dim,
+            loss_type=loss_type,
             n_hidden=self.hidden_dim,
             p=self.drop_p,
+            target_mean=self.target_mean,
+            target_std=self.target_std,
+            target_log_transform=self.log_transform_target,
+            huber_delta=self.huber_delta,
         ).to(pl_module.device)
         
         # Initialize optimizer
@@ -117,18 +123,8 @@ class SSLOnlineEvaluatorRegression(Callback):
             weight_decay=1e-5
         )
         
-        # Initialize metrics
-        self.mae_train = torchmetrics.MeanAbsoluteError().to(pl_module.device)
-        self.rmse_train = torchmetrics.MeanSquaredError(squared=False).to(pl_module.device)
-        # RMSLE: sqrt(mean((log1p(y_true) - log1p(y_pred))^2))
-        # Use MSE on log1p values, then take sqrt
-        self.rmsle_train = torchmetrics.MeanSquaredError().to(pl_module.device)
-        self.r2_train = torchmetrics.R2Score().to(pl_module.device)
-        
-        self.mae_val = torchmetrics.MeanAbsoluteError().to(pl_module.device)
-        self.rmse_val = torchmetrics.MeanSquaredError(squared=False).to(pl_module.device)
-        self.rmsle_val = torchmetrics.MeanSquaredError().to(pl_module.device)
-        self.r2_val = torchmetrics.R2Score().to(pl_module.device)
+        # Initialize storage for validation losses (head already calculates them)
+        self.val_losses = []
         
         # Tracking is done by data_id (unique and deterministic), no need for indices
         
@@ -194,10 +190,10 @@ class SSLOnlineEvaluatorRegression(Callback):
         pl_module: LightningModule,
         batch: Sequence,
         dataset=None,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Optional[list]]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Dict[str, Tensor], Optional[list]]:
         """
         Shared step for training and validation.
-        Returns: (predictions_normalized, targets_normalized, predictions_denorm, targets_denorm, loss, data_ids)
+        Returns: (predictions_normalized, targets_normalized, predictions_denorm, targets_denorm, loss, loss_dict, data_ids)
         """
         with torch.no_grad():
             with set_training(pl_module, False):
@@ -220,63 +216,34 @@ class SSLOnlineEvaluatorRegression(Callback):
                     # Image-only: get image embeddings
                     _, representations = pl_module.forward_imaging(x)  # Returns (projection, embeddings)
         
-        # Forward pass through regression MLP
-        predictions_normalized = self.online_evaluator(representations)  # (B,)
-        
         # Get targets from batch
-        if y is None:
-            raise ValueError("Targets must be in batch. Ensure dataset returns targets in __getitem__.")
+        if y_original is None:
+            raise ValueError("target_original must be in batch. Ensure dataset returns target_original in __getitem__.")
         
-        targets_normalized = y.float()  # Ensure float
-        # Note: targets from dataset are log-transformed but may not be normalized
-        # We normalize them here for loss calculation
-        if self.target_std != 1.0 or self.target_mean != 0.0:
-            # Normalize targets for loss calculation (if not already normalized)
-            targets_for_loss = (targets_normalized - self.target_mean) / self.target_std
+        # Forward pass through regression head with y_original (head handles everything internally)
+        # We only pass y_original - the head will handle decoding and loss calculation
+        head_result = self.online_evaluator(
+            representations,
+            target_original=y_original.float()  # Pass y_original directly, head handles everything
+        )
+        
+        # Extract results from head
+        predictions_normalized = head_result['prediction_log']  # (B,) - normalized log space
+        predictions_original_scale = head_result['prediction_original']  # (B,) - original scale
+        loss = head_result['loss']  # scalar - total weighted loss
+        loss_dict = head_result['loss_dict']  # dict with all individual losses (for monitoring)
+        
+        # Use y_original directly (already in original scale from dataloader)
+        targets_original_scale = y_original.float() if y_original is not None else None
+        
+        # For backward compatibility, also compute targets_normalized if needed
+        # (but we don't use it for loss calculation anymore)
+        if y is not None:
+            targets_normalized = y.float()
         else:
-            targets_for_loss = targets_normalized
+            targets_normalized = None
         
-        # Calculate loss on normalized predictions
-        if self.regression_loss == 'rmsle':
-            # RMSLE loss: use original ground truth directly (not converted back from normalized)
-            if y_original is None:
-                raise ValueError("RMSLE loss requires target_original in batch. Ensure dataset returns target_original in __getitem__.")
-            loss = self._rmsle_loss(predictions_normalized, y_original)
-        elif self.regression_loss == 'huber':
-            loss = F.huber_loss(predictions_normalized, targets_for_loss, delta=self.huber_delta)
-        elif self.regression_loss == 'mse':
-            loss = F.mse_loss(predictions_normalized, targets_for_loss)
-        elif self.regression_loss == 'mae':
-            loss = F.l1_loss(predictions_normalized, targets_for_loss)
-        else:
-            raise ValueError(f"Unknown regression loss: {self.regression_loss}. Options: 'rmsle', 'huber', 'mse', 'mae'")
-        
-        # IMPORTANT: Convert predictions to original scale (USD/m²)
-        # Step 1: Denormalize (if targets were normalized)
-        # predictions_normalized is in normalized log space
-        predictions_log_space = (predictions_normalized * self.target_std) + self.target_mean
-        
-        # Step 2: Inverse log-transform to get original scale (USD/m²)
-        if self.log_transform_target:
-            predictions_original_scale = torch.expm1(predictions_log_space)  # exp(x) - 1
-        else:
-            predictions_original_scale = predictions_log_space
-        
-        # Step 3: Also convert targets to original scale for comparison
-        if self.log_transform_target:
-            targets_original_scale = torch.expm1(targets_normalized)  # Targets are log-transformed but not normalized
-        else:
-            targets_original_scale = targets_normalized
-        
-        # Ensure non-negative (construction cost can't be negative)
-        predictions_original_scale = torch.clamp(predictions_original_scale, min=0.0)
-        targets_original_scale = torch.clamp(targets_original_scale, min=0.0)
-        
-        # Extract data_ids from batch (8th element for TIP multimodal)
-        # data_ids is already extracted in to_device method, so it's already available
-        # This is just for consistency - data_ids should already be set from to_device
-        
-        return predictions_normalized, targets_normalized, predictions_original_scale, targets_original_scale, loss, data_ids
+        return predictions_normalized, targets_normalized, predictions_original_scale, targets_original_scale, loss, loss_dict, data_ids
     
     def _rmsle_loss(self, y_pred: torch.Tensor, y_true_original: torch.Tensor) -> torch.Tensor:
         """
@@ -330,7 +297,7 @@ class SSLOnlineEvaluatorRegression(Callback):
         # Get dataset for target extraction if needed
         dataset = trainer.train_dataloader.dataset if hasattr(trainer.train_dataloader, 'dataset') else None
         
-        preds_norm, targets_norm, preds_denorm, targets_denorm, loss, _ = self.shared_step(
+        preds_norm, targets_norm, preds_denorm, targets_denorm, loss, loss_dict, _ = self.shared_step(
             pl_module, batch, dataset
         )
         
@@ -339,22 +306,20 @@ class SSLOnlineEvaluatorRegression(Callback):
         self.optimizer.step()
         self.optimizer.zero_grad()
         
-        # Update metrics (on original scale values in USD/m²) - accumulate across batches
-        # preds_denorm and targets_denorm are already in original scale (USD/m²)
-        self.mae_train.update(preds_denorm, targets_denorm)
-        self.rmse_train.update(preds_denorm, targets_denorm)
-        self.r2_train.update(preds_denorm, targets_denorm)
-        
-        # RMSLE: sqrt(mean((log1p(y_true) - log1p(y_pred))^2))
-        # Compute log1p difference and update MSE metric, then take sqrt
-        # Both preds_denorm and targets_denorm are in original scale (USD/m²)
-        log_pred = torch.log1p(preds_denorm)
-        log_target = torch.log1p(targets_denorm)
-        self.rmsle_train.update(log_pred, log_target)
-        
-        # Log loss only (metrics will be logged at epoch end)
-        # Use shorter name for progress bar to avoid truncation
+        # Log losses from head (already calculated internally) - no need for manual metric calculation
         pl_module.log("regression_online.train.loss", loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        
+        # Log individual losses from head (for monitoring)
+        if 'rmsle' in loss_dict:
+            pl_module.log("regression_online.train.rmsle", loss_dict['rmsle'], on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        if 'mae' in loss_dict:
+            pl_module.log("regression_online.train.mae", loss_dict['mae'], on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        if 'rmse' in loss_dict:
+            pl_module.log("regression_online.train.rmse", loss_dict['rmse'], on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        if 'huber' in loss_dict:
+            pl_module.log("regression_online.train.huber", loss_dict['huber'], on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        if 'mse' in loss_dict:
+            pl_module.log("regression_online.train.mse", loss_dict['mse'], on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
     
     def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Initialize tracking at the start of validation epoch."""
@@ -376,7 +341,7 @@ class SSLOnlineEvaluatorRegression(Callback):
         """Evaluate regression head on validation batch."""
         dataset = trainer.val_dataloaders[dataloader_idx].dataset if hasattr(trainer.val_dataloaders[dataloader_idx], 'dataset') else None
         
-        preds_norm, targets_norm, preds_denorm, targets_denorm, loss, data_ids = self.shared_step(
+        preds_norm, targets_norm, preds_denorm, targets_denorm, loss, loss_dict, data_ids = self.shared_step(
             pl_module, batch, dataset
         )
         
@@ -410,58 +375,51 @@ class SSLOnlineEvaluatorRegression(Callback):
                 self.tracked_val_preds[data_id] = float(preds_denorm[local_idx].cpu().detach())
                 self.tracked_val_targets[data_id] = float(targets_denorm[local_idx].cpu().detach())
         
-        # Update metrics (on original scale values in USD/m²) - accumulate across batches
-        # preds_denorm and targets_denorm are already in original scale (USD/m²)
-        self.mae_val.update(preds_denorm, targets_denorm)
-        self.rmse_val.update(preds_denorm, targets_denorm)
-        self.r2_val.update(preds_denorm, targets_denorm)
+        # Store loss_dict for epoch-end aggregation (head already calculated all losses)
+        self.val_losses.append({k: v.detach().cpu() for k, v in loss_dict.items()})
         
-        # RMSLE: sqrt(mean((log1p(y_true) - log1p(y_pred))^2))
-        # Compute log1p difference and update MSE metric, then take sqrt
-        # Both preds_denorm and targets_denorm are in original scale (USD/m²)
-        log_pred = torch.log1p(preds_denorm)
-        log_target = torch.log1p(targets_denorm)
-        self.rmsle_val.update(log_pred, log_target)
-        
-        # Log loss only (metrics will be logged at epoch end)
+        # Log losses from head (already calculated) - PyTorch Lightning will aggregate automatically
         pl_module.log("regression_online.val.loss", loss, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+        
+        # Log individual losses from head (for monitoring)
+        if 'rmsle' in loss_dict:
+            pl_module.log("regression_online.val.rmsle", loss_dict['rmsle'], on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+        if 'mae' in loss_dict:
+            pl_module.log("regression_online.val.mae", loss_dict['mae'], on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+        if 'rmse' in loss_dict:
+            pl_module.log("regression_online.val.rmse", loss_dict['rmse'], on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+        if 'huber' in loss_dict:
+            pl_module.log("regression_online.val.huber", loss_dict['huber'], on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+        if 'mse' in loss_dict:
+            pl_module.log("regression_online.val.mse", loss_dict['mse'], on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
     
     def on_train_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Log training metrics at epoch end."""
-        # Compute and log all metrics at epoch end
-        mae_value = self.mae_train.compute()
-        rmse_value = self.rmse_train.compute()
-        rmsle_value = torch.sqrt(self.rmsle_train.compute())
-        r2_value = self.r2_train.compute()
-        
-        # Log with full names (for WandB/logging)
-        pl_module.log("regression_online.train.mae", mae_value, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
-        pl_module.log("regression_online.train.rmse", rmse_value, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
-        pl_module.log("regression_online.train.rmsle", rmsle_value, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
-        pl_module.log("regression_online.train.r2", r2_value, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
-        
-        # Log with short names for progress bar (only show RMSLE - the primary metric)
-        pl_module.log("train_rmsle", rmsle_value, on_step=False, on_epoch=True, prog_bar=True, logger=False, sync_dist=True)
-        
-        # Reset metrics for next epoch
-        self.mae_train.reset()
-        self.rmse_train.reset()
-        self.rmsle_train.reset()
-        self.r2_train.reset()
+        # Training losses are already logged during training_step from head
+        # No need to compute metrics manually - head handles all loss calculation
+        # This method is kept for compatibility but does nothing
+        pass
     
     def on_validation_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Log validation metrics at epoch end."""
-        # Compute and log all metrics at epoch end
-        mae_value = self.mae_val.compute()
-        rmse_value = self.rmse_val.compute()
-        rmsle_value = torch.sqrt(self.rmsle_val.compute())
-        r2_value = self.r2_val.compute()
+        # Aggregate losses from all validation batches (head already calculated them)
+        if len(self.val_losses) == 0:
+            return
         
-        # Log with full names (for WandB/logging)
+        # Compute mean of each loss across all batches
+        mae_value = torch.stack([loss_dict['mae'] for loss_dict in self.val_losses if 'mae' in loss_dict]).mean()
+        rmse_value = torch.stack([loss_dict['rmse'] for loss_dict in self.val_losses if 'rmse' in loss_dict]).mean()
+        rmsle_value = torch.stack([loss_dict['rmsle'] for loss_dict in self.val_losses if 'rmsle' in loss_dict]).mean()
+        
+        # Convert to float for logging
+        mae_value = float(mae_value.item())
+        rmse_value = float(rmse_value.item())
+        rmsle_value = float(rmsle_value.item())
+        
+        # Log aggregated metrics (already logged per-batch, but log here for clarity)
         pl_module.log("regression_online.val.mae", mae_value, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         pl_module.log("regression_online.val.rmse", rmse_value, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         pl_module.log("regression_online.val.rmsle", rmsle_value, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
-        pl_module.log("regression_online.val.r2", r2_value, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         
         # Log with short names for progress bar (only show RMSLE - the primary metric)
         pl_module.log("val_rmsle", rmsle_value, on_step=False, on_epoch=True, prog_bar=True, logger=False, sync_dist=True)
@@ -497,11 +455,8 @@ class SSLOnlineEvaluatorRegression(Callback):
             if logged_count == 0:
                 print(f"⚠️ Warning: No validation samples were logged. Available predictions: {list(self.tracked_val_preds.keys())}")
         
-        # Reset metrics for next epoch
-        self.mae_val.reset()
-        self.rmse_val.reset()
-        self.rmsle_val.reset()
-        self.r2_val.reset()
+        # Reset losses storage for next epoch
+        self.val_losses = []
         
         # Note: tracked_val_preds and tracked_val_targets are cleared in on_validation_epoch_start
     

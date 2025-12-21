@@ -21,7 +21,7 @@ data_base: /hdd/hiep/CODE/Construction_Cost_Prediction
 # Data paths (absolute paths)
 
 # K-Fold Cross-Validation Options
-use_kfold: True  # If true, use k-fold CV from unified trainval.csv; if false, use fixed train/val splits
+use_kfold: False  # If true, use k-fold CV from unified trainval.csv; if false, use fixed train/val splits
 k_fold: 5  # Number of folds (only used if use_kfold=true)
 k_fold_seed: 42  # Random seed for k-fold splitting (only used if use_kfold=true)
 k_fold_current: -1  # Current fold to use (0-indexed, 0 to k_fold-1). Set to -1 (default) to run all folds automatically (only used if use_kfold=true)
@@ -138,14 +138,21 @@ generate_embeddings: false  # Set to true to generate embeddings only
 algorithm_name: TIP
 online_mlp: true  # Enable online regression evaluation
 num_classes: 1  # For regression
-# regression_loss: huber  # Options: rmsle (competition metric), huber (robust to outliers), mse, mae
-regression_loss: rmsle
+# regression_loss must be a dict with loss names and weights
+# Only losses in this dict will contribute to the total weighted loss for backprop
+# All losses (rmsle, mae, rmse, mse, huber) are calculated internally for monitoring
+regression_loss:
+  rmsle: 0.5  # Primary metric (competition)
+  mae: 0.2    # Interpretable error
+  mse: 0.2    # Penalize large errors
+  rmse: 0.1   # Root mean squared error
 regression_head_class: RegressionMLP  # Head class name from ConstructionCostHead module (must match class name exactly)
 regression_head_dropout: 0.2  # Dropout probability for regression head
 huber_delta: 1.0  # Delta parameter for Huber loss
 target_mean: 6.513477  # Mean of log(1 + target) values (computed from training dataset)
 target_std: 1.101045   # Std of log(1 + target) values (computed from training dataset)
 target_log_transform: true  # Whether targets are log-transformed (log1p)
+eval_metric: rmsle  # Metric to monitor for best checkpoint (rmsle, mae, rmse) - rmsle is primary
 limit_train_batches: null
 limit_val_batches: null
 enable_progress_bar: true

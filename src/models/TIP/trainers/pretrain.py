@@ -304,7 +304,7 @@ def _pretrain_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
       callbacks.append(SSLOnlineEvaluatorRegression(
         z_dim=z_dim,
         hidden_dim=hparams.embedding_dim,
-        regression_loss=getattr(hparams, 'regression_loss', 'huber'),
+        regression_loss=getattr(hparams, 'regression_loss', {'rmsle': 1.0}),
         huber_delta=getattr(hparams, 'huber_delta', 1.0),
         target_mean=target_mean,
         target_std=target_std,
@@ -323,14 +323,23 @@ def _pretrain_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
         multimodal=(hparams.datatype=='multimodal'),
         strategy=hparams.strategy
       ))
-  # Save best checkpoint based on validation RMSLE (lower is better)
+  # Save best checkpoint based on validation metric (lower is better)
   # Only save best checkpoint if we have regression online evaluation enabled
   if hparams.online_mlp and hparams.num_classes == 1:
-    # Monitor validation RMSLE from online regression evaluator
+    # Get eval_metric from config (default to rmsle)
+    eval_metric = getattr(hparams, 'eval_metric', 'rmsle')
+    # Determine mode based on metric (lower is better for rmsle, mae, rmse)
+    if eval_metric in ['rmsle', 'mae', 'rmse']:
+      mode = 'min'  # Lower is better
+    else:
+      mode = 'min'  # Default to min (lower is better)
+    
+    # Monitor validation metric from online regression evaluator
+    metric_key = f'regression_online.val.{eval_metric}'
     callbacks.append(ModelCheckpoint(
-      monitor='regression_online.val.rmsle',
-      mode='min',  # Lower RMSLE is better
-      filename='checkpoint_best_rmsle_{epoch:02d}_{regression_online.val.rmsle:.4f}',
+      monitor=metric_key,
+      mode=mode,
+      filename=f'checkpoint_best_{eval_metric}_{{epoch:02d}}_{{{metric_key}:.4f}}',
       dirpath=logdir,
       save_top_k=1,  # Only keep the best checkpoint
       auto_insert_metric_name=False,

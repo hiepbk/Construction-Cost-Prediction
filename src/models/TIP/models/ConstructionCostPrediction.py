@@ -14,7 +14,7 @@ Used by:
 """
 import torch
 import torch.nn as nn
-from omegaconf import OmegaConf, open_dict
+from omegaconf import OmegaConf, open_dict, DictConfig
 from models.Tip_utils.Tip_downstream import TIPBackbone
 from models.ConstructionCostHead import create_head
 
@@ -157,12 +157,28 @@ class ConstructionCostPrediction(nn.Module):
                 hidden_dim = getattr(hparams, 'embedding_dim', z_dim)
                 drop_p = getattr(hparams, 'regression_head_dropout', 0.2)
                 
+                # Get target normalization parameters from hparams
+                target_mean = getattr(hparams, 'target_mean', 0.0)
+                target_std = getattr(hparams, 'target_std', 1.0)
+                target_log_transform = getattr(hparams, 'target_log_transform', True)
+                loss_type = getattr(hparams, 'regression_loss', {'rmsle': 1.0})
+                huber_delta = getattr(hparams, 'huber_delta', 1.0)
+                
+                # Preprocess loss_type: convert DictConfig to dict before passing to head
+                if isinstance(loss_type, DictConfig):
+                    loss_type = dict(loss_type)
+                
                 # Create regression head (always named self.regression)
                 self.regression = create_head(
                     head_name=regression_head_class,
                     n_input=z_dim,
+                    loss_type=loss_type,
                     n_hidden=hidden_dim,
-                    p=drop_p
+                    p=drop_p,
+                    target_mean=target_mean,
+                    target_std=target_std,
+                    target_log_transform=target_log_transform,
+                    huber_delta=huber_delta
                 )
                 
                 # Load head weights
@@ -192,12 +208,28 @@ class ConstructionCostPrediction(nn.Module):
                                 hidden_dim = getattr(hparams, 'embedding_dim', z_dim)
                                 drop_p = getattr(hparams, 'regression_head_dropout', 0.2)
                                 
+                                # Get target normalization parameters from hparams
+                                target_mean = getattr(hparams, 'target_mean', 0.0)
+                                target_std = getattr(hparams, 'target_std', 1.0)
+                                target_log_transform = getattr(hparams, 'target_log_transform', True)
+                                loss_type = getattr(hparams, 'regression_loss', {'rmsle': 1.0})
+                                huber_delta = getattr(hparams, 'huber_delta', 1.0)
+                                
+                                # Preprocess loss_type: convert DictConfig to dict before passing to head
+                                if isinstance(loss_type, DictConfig):
+                                    loss_type = dict(loss_type)
+                                
                                 # Create regression head (always named self.regression)
                                 self.regression = create_head(
                                     head_name=callback_head_class,
                                     n_input=z_dim,
+                                    loss_type=loss_type,
                                     n_hidden=hidden_dim,
-                                    p=drop_p
+                                    p=drop_p,
+                                    target_mean=target_mean,
+                                    target_std=target_std,
+                                    target_log_transform=target_log_transform,
+                                    huber_delta=huber_delta
                                 )
                                 
                                 # Load the trained weights from pretraining
@@ -224,12 +256,28 @@ class ConstructionCostPrediction(nn.Module):
         hidden_dim = getattr(hparams, 'embedding_dim', z_dim)
         drop_p = getattr(hparams, 'regression_head_dropout', 0.2)
         
+        # Get target normalization parameters from hparams
+        target_mean = getattr(hparams, 'target_mean', 0.0)
+        target_std = getattr(hparams, 'target_std', 1.0)
+        target_log_transform = getattr(hparams, 'target_log_transform', True)
+        loss_type = getattr(hparams, 'regression_loss', {'rmsle': 1.0})
+        huber_delta = getattr(hparams, 'huber_delta', 1.0)
+        
+        # Preprocess loss_type: convert DictConfig to dict before passing to head
+        if isinstance(loss_type, DictConfig):
+            loss_type = dict(loss_type)
+        
         # Create regression head (separate from backbone)
         self.regression = create_head(
             head_name=regression_head_class,
             n_input=z_dim,
+            loss_type=loss_type,
             n_hidden=hidden_dim,
-            p=drop_p
+            p=drop_p,
+            target_mean=target_mean,
+            target_std=target_std,
+            target_log_transform=target_log_transform,
+            huber_delta=huber_delta
         )
     
     def forward(self, x, visualize=False):
@@ -242,10 +290,14 @@ class ConstructionCostPrediction(nn.Module):
         
         Returns:
             If visualize=False:
-                prediction: (B,) - Predicted cost in normalized log space
+                dict with keys:
+                    - 'prediction_log': (B,) - Prediction in normalized log space
+                    - 'prediction_original': (B,) - Prediction in original scale (USD/m²)
             If visualize=True:
-                prediction: (B,) - Predicted cost
-                attn: Attention maps for visualization
+                dict with keys:
+                    - 'prediction_log': (B,) - Prediction in normalized log space
+                    - 'prediction_original': (B,) - Prediction in original scale (USD/m²)
+                    - 'attn': Attention maps for visualization
         """
         # Get multimodal features from backbone (x_m shape: (B, 20, 512))
         if visualize:
@@ -255,10 +307,10 @@ class ConstructionCostPrediction(nn.Module):
         
         # Pass x_m directly to regression head
         # The regression head will handle aggregation internally
-        prediction = self.regression(x_m)  # (B, 20, 512) -> (B,)
+        result = self.regression(x_m)  # Returns dict with 'prediction_log' and 'prediction_original'
         
         if visualize:
-            return prediction, attn
-        else:
-            return prediction
+            result['attn'] = attn
+        
+        return result
 

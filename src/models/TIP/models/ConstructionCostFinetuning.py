@@ -2,7 +2,7 @@
 Fine-tuning module for Construction Cost Prediction
 Adapts TIP's pretrained backbone for regression task with log-transformed targets.
 '''
-from typing import Tuple
+from typing import Tuple, Dict
 import torch
 import torch.nn as nn
 import torchmetrics
@@ -40,35 +40,17 @@ class ConstructionCostFinetuning(pl.LightningModule):
         regression_head_class = getattr(hparams, 'regression_head_class', 'RegressionMLP')
         print(f"✅ ConstructionCostPrediction model created with head: {regression_head_class}")
         
-        # Loss function: RMSLE (competition metric), Huber (robust to outliers), MAE, or MSE
-        loss_type = getattr(hparams, 'regression_loss', 'huber')
-        self.loss_type = loss_type  # Store for later checking
-        if loss_type == 'rmsle':
-            # RMSLE: sqrt(mean((log1p(y_true) - log1p(y_pred))^2))
-            # This directly optimizes the competition metric
-            self.criterion = self._rmsle_loss
-        elif loss_type == 'huber':
-            self.criterion = nn.HuberLoss(delta=getattr(hparams, 'huber_delta', 1.0))
-        elif loss_type == 'mae':
-            self.criterion = nn.L1Loss()
-        elif loss_type == 'mse':
-            self.criterion = nn.MSELoss()
-        else:
-            raise ValueError(f"Unknown loss type: {loss_type}. Options: 'rmsle', 'huber', 'mae', 'mse'")
+        # Loss configuration is now handled by the head (dict format)
+        # No need to set up criterion here - head handles all loss calculation
         
-        # Metrics (on original scale, like pretraining)
-        self.mae_train = torchmetrics.MeanAbsoluteError()
-        self.mae_val = torchmetrics.MeanAbsoluteError()
+        # Metrics for test only (evaluation metrics, not losses)
+        # Training and validation losses come from head, so we don't need torchmetrics
         self.mae_test = torchmetrics.MeanAbsoluteError()
-        
-        self.rmse_train = torchmetrics.MeanSquaredError()  # Will take sqrt later
-        self.rmse_val = torchmetrics.MeanSquaredError()
         self.rmse_test = torchmetrics.MeanSquaredError()
-        
-        # RMSLE: Use MSE on log1p values, then take sqrt
-        self.rmsle_train = torchmetrics.MeanSquaredError()
-        self.rmsle_val = torchmetrics.MeanSquaredError()
         self.rmsle_test = torchmetrics.MeanSquaredError()
+        
+        # Store validation losses from head for epoch-end aggregation
+        self.val_losses = []  # List of loss_dicts from each validation batch
         
         # Track predictions for WandB logging (like pretraining)
         self.tracked_val_preds = {}  # Dict: {data_id: prediction_value}
@@ -84,8 +66,11 @@ class ConstructionCostFinetuning(pl.LightningModule):
         self.best_val_rmsle = float('inf')
         self.best_val_score = float('inf')  # For compatibility with evaluate.py (will be set based on eval_metric)
         
+        # Get loss config for printing
+        loss_config = getattr(hparams, 'regression_loss', {'rmsle': 1.0})
+        
         print(f"Initialized ConstructionCostFinetuning")
-        print(f"  Loss: {loss_type}")
+        print(f"  Loss config: {loss_config}")
         print(f"  Target log-transform: {self.target_log_transform}")
         print(f"  Target normalization: mean={self.target_mean:.2f}, std={self.target_std:.2f}")
     
@@ -148,7 +133,7 @@ class ConstructionCostFinetuning(pl.LightningModule):
         
         return rmsle
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
         Forward pass.
         
@@ -156,10 +141,11 @@ class ConstructionCostFinetuning(pl.LightningModule):
             x: Tuple of (image, tabular) or (image, tabular, mask)
         
         Returns:
-            prediction: (B,) - Predicted cost in normalized log space
+            dict with keys:
+                - 'prediction_log': (B,) - Prediction in normalized log space
+                - 'prediction_original': (B,) - Prediction in original scale (USD/m²)
         """
-        y_hat = self.model(x)
-        return y_hat
+        return self.model(x)  # Returns dict with 'prediction_log' and 'prediction_original'
     
     def training_step(self, batch: Tuple, _) -> torch.Tensor:
         """
@@ -184,17 +170,23 @@ class ConstructionCostFinetuning(pl.LightningModule):
         else:
             raise ValueError(f"Unexpected batch size: {len(batch)}. Expected 8 (ConstructionCostTIPDataset) or 2 (other datasets)")
         
-        y_hat = self.forward(x)
+        # Forward pass through model (returns x_m from backbone)
+        x_m = self.model.backbone(x, visualize=False)  # (B, 20, 512)
         
-        # For RMSLE loss, use original ground truth directly (not normalized/log-transformed)
-        if self.loss_type == 'rmsle' and y_original is not None:
-            loss = self.criterion(y_hat.squeeze(), y_original.squeeze())
-        else:
-            # For other losses (Huber, MAE, MSE), use normalized log-transformed targets
-            loss = self.criterion(y_hat.squeeze(), y.squeeze())
+        # Forward through regression head with y_original (head handles everything internally)
+        # We only pass y_original - the head will handle decoding and loss calculation
+        head_result = self.model.regression(
+            x_m, 
+            target_original=y_original.float()  # Pass y_original directly, head handles everything
+        )
         
-        # Convert predictions and targets to original scale for metrics (like pretraining)
-        y_hat_original = self.denormalize_target(y_hat.detach().squeeze())
+        # Extract results from head
+        y_hat = head_result['prediction_log']  # (B,) - normalized log space
+        y_hat_original = head_result['prediction_original']  # (B,) - original scale
+        loss = head_result['loss']  # scalar - total weighted loss (for backprop)
+        loss_dict = head_result['loss_dict']  # dict with all individual losses
+        
+        # Get ground truth in original scale for metrics
         if y_original is not None:
             y_true_original = y_original.squeeze()
         else:
@@ -202,34 +194,32 @@ class ConstructionCostFinetuning(pl.LightningModule):
             y_true_original = self.denormalize_target(y.detach().squeeze())
         
         # Ensure non-negative
-        y_hat_original = torch.clamp(y_hat_original, min=0.0)
         y_true_original = torch.clamp(y_true_original, min=0.0)
         
-        # Update metrics on original scale (USD/m²)
-        self.mae_train(y_hat_original, y_true_original)
-        self.rmse_train(y_hat_original, y_true_original)
-        
-        # RMSLE: sqrt(mean((log1p(y_true) - log1p(y_pred))^2))
-        log_pred = torch.log1p(y_hat_original)
-        log_true = torch.log1p(y_true_original)
-        self.rmsle_train(log_pred, log_true)
-        
-        # Log metrics (only compute when needed, avoid warnings)
+        # Log losses from head (already calculated internally) - no need for manual metric calculation
         batch_size = y_hat_original.shape[0] if len(y_hat_original.shape) > 0 else 1
         self.log('eval.train.loss', loss, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
-        self.log('eval.train.mae', self.mae_train, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
-        self.log('eval.train.rmse', torch.sqrt(self.rmse_train.compute()), on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
-        self.log('eval.train.rmsle', torch.sqrt(self.rmsle_train.compute()), on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
-        # Primary metric for progress bar
-        self.log('train_rmsle', torch.sqrt(self.rmsle_train.compute()), on_epoch=True, on_step=False, prog_bar=True, logger=False, sync_dist=True, batch_size=batch_size)
+        
+        # Log individual losses from head (already calculated, no need to recompute)
+        if 'rmsle' in loss_dict:
+            self.log('eval.train.rmsle', loss_dict['rmsle'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+            self.log('train_rmsle', loss_dict['rmsle'], on_epoch=True, on_step=False, prog_bar=True, logger=False, sync_dist=True, batch_size=batch_size)
+        if 'mae' in loss_dict:
+            self.log('eval.train.mae', loss_dict['mae'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        if 'rmse' in loss_dict:
+            self.log('eval.train.rmse', loss_dict['rmse'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        if 'huber' in loss_dict:
+            self.log('eval.train.huber', loss_dict['huber'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        if 'mse' in loss_dict:
+            self.log('eval.train.mse', loss_dict['mse'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
         
         return loss
     
     def training_epoch_end(self, _) -> None:
-        """Reset metrics after training epoch"""
-        self.mae_train.reset()
-        self.rmse_train.reset()
-        self.rmsle_train.reset()
+        """Reset metrics after training epoch (not used for training, but kept for compatibility)"""
+        # Training metrics are not calculated manually anymore (head handles losses)
+        # But we keep this method for compatibility
+        pass
     
     def validation_step(self, batch: Tuple, _) -> None:
         """Validation step"""
@@ -247,26 +237,23 @@ class ConstructionCostFinetuning(pl.LightningModule):
         else:
             raise ValueError(f"Unexpected batch size: {len(batch)}. Expected 8 (ConstructionCostTIPDataset) or 2 (other datasets)")
         
-        y_hat = self.forward(x)
+        # Forward pass through model (returns x_m from backbone)
+        x_m = self.model.backbone(x, visualize=False)  # (B, 20, 512)
         
-        # For RMSLE loss, use original ground truth directly (not normalized/log-transformed)
-        if self.loss_type == 'rmsle' and y_original is not None:
-            loss = self.criterion(y_hat.squeeze(), y_original.squeeze())
-        else:
-            # For other losses (Huber, MAE, MSE), use normalized log-transformed targets
-            loss = self.criterion(y_hat.squeeze(), y.squeeze())
+        # Forward through regression head with y_original (head handles everything internally)
+        head_result = self.model.regression(
+            x_m,
+            target_original=y_original.float()  # Pass y_original directly, head handles everything
+        )
         
-        # Convert predictions and targets to original scale for metrics (like pretraining)
-        y_hat_original = self.denormalize_target(y_hat.detach().squeeze())
-        if y_original is not None:
-            y_true_original = y_original.squeeze()
-        else:
-            # Fallback: convert from log space
-            y_true_original = self.denormalize_target(y.detach().squeeze())
+        # Extract results from head
+        y_hat = head_result['prediction_log']  # (B,) - normalized log space
+        y_hat_original = head_result['prediction_original']  # (B,) - original scale
+        loss = head_result['loss']  # scalar - total weighted loss
+        loss_dict = head_result['loss_dict']  # dict with all individual losses
         
-        # Ensure non-negative
-        y_hat_original = torch.clamp(y_hat_original, min=0.0)
-        y_true_original = torch.clamp(y_true_original, min=0.0)
+        # Use y_original directly (already in original scale from dataloader)
+        y_true_original = y_original.squeeze() if y_original is not None else None
         
         # Track predictions for WandB logging (like pretraining)
         if data_id is not None:
@@ -274,39 +261,53 @@ class ConstructionCostFinetuning(pl.LightningModule):
                 self.tracked_val_preds[str(did)] = float(y_hat_original[idx].cpu().detach())
                 self.tracked_val_targets[str(did)] = float(y_true_original[idx].cpu().detach())
         
-        # Update metrics on original scale (USD/m²)
-        self.mae_val(y_hat_original, y_true_original)
-        self.rmse_val(y_hat_original, y_true_original)
+        # Store loss_dict for epoch-end aggregation (head already calculated all losses)
+        self.val_losses.append({k: v.detach().cpu() for k, v in loss_dict.items()})
         
-        # RMSLE: sqrt(mean((log1p(y_true) - log1p(y_pred))^2))
-        log_pred = torch.log1p(y_hat_original)
-        log_true = torch.log1p(y_true_original)
-        self.rmsle_val(log_pred, log_true)
+        # Log losses from head (already calculated) - PyTorch Lightning will aggregate automatically
+        batch_size = y_hat_original.shape[0] if len(y_hat_original.shape) > 0 else 1
+        self.log('eval.val.loss', loss, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
         
-        self.log('eval.val.loss', loss, on_epoch=True, on_step=False, sync_dist=True)
+        # Log individual losses from head (already calculated)
+        if 'rmsle' in loss_dict:
+            self.log('eval.val.rmsle', loss_dict['rmsle'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        if 'mae' in loss_dict:
+            self.log('eval.val.mae', loss_dict['mae'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        if 'rmse' in loss_dict:
+            self.log('eval.val.rmse', loss_dict['rmse'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        if 'huber' in loss_dict:
+            self.log('eval.val.huber', loss_dict['huber'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        if 'mse' in loss_dict:
+            self.log('eval.val.mse', loss_dict['mse'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
     
     def on_validation_epoch_start(self) -> None:
-        """Clear tracked predictions at start of validation epoch"""
+        """Clear tracked predictions and losses at start of validation epoch"""
         self.tracked_val_preds = {}
         self.tracked_val_targets = {}
+        self.val_losses = []  # Reset for new epoch
     
     def validation_epoch_end(self, _) -> None:
         """Compute validation metrics and log predictions to WandB (like pretraining)"""
         if self.trainer.sanity_checking:
             return
         
-        mae_val = self.mae_val.compute()
-        rmse_val = torch.sqrt(self.rmse_val.compute())
-        rmsle_val = torch.sqrt(self.rmsle_val.compute())  # Primary metric
+        # Aggregate losses from all validation batches (head already calculated them)
+        if len(self.val_losses) == 0:
+            return
         
-        # Get batch size from metrics (approximate) - use update count if available
-        try:
-            batch_size = self.mae_val._update_count if hasattr(self.mae_val, '_update_count') else 1
-        except:
-            batch_size = 1
+        # Compute mean of each loss across all batches
+        mae_val = torch.stack([loss_dict['mae'] for loss_dict in self.val_losses if 'mae' in loss_dict]).mean()
+        rmse_val = torch.stack([loss_dict['rmse'] for loss_dict in self.val_losses if 'rmse' in loss_dict]).mean()
+        rmsle_val = torch.stack([loss_dict['rmsle'] for loss_dict in self.val_losses if 'rmsle' in loss_dict]).mean()
         
-        # Log metrics (like pretraining)
-        self.log('eval.val.mae', mae_val, on_epoch=True, on_step=False, sync_dist=True, metric_attribute=self.mae_val, batch_size=batch_size)
+        # Convert to float for logging
+        mae_val = float(mae_val.item())
+        rmse_val = float(rmse_val.item())
+        rmsle_val = float(rmsle_val.item())
+        
+        # Log aggregated metrics (already logged per-batch, but log here for clarity and best checkpoint tracking)
+        batch_size = 1  # Not needed for epoch-level logging
+        self.log('eval.val.mae', mae_val, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
         self.log('eval.val.rmse', rmse_val, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
         self.log('eval.val.rmsle', rmsle_val, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)  # Primary metric
         # Primary metric for progress bar
@@ -347,12 +348,10 @@ class ConstructionCostFinetuning(pl.LightningModule):
             # Default to MAE
             self.best_val_score = self.best_val_mae
         
-        # Reset metrics and tracking for next epoch
-        self.mae_val.reset()
-        self.rmse_val.reset()
-        self.rmsle_val.reset()
+        # Reset tracking for next epoch
         self.tracked_val_preds = {}
         self.tracked_val_targets = {}
+        self.val_losses = []
     
     def test_step(self, batch: Tuple, _) -> None:
         """Test step"""
@@ -368,7 +367,15 @@ class ConstructionCostFinetuning(pl.LightningModule):
         else:
             raise ValueError(f"Unexpected batch size: {len(batch)}. Expected 8 (ConstructionCostTIPDataset) or 2 (other datasets)")
         
-        y_hat = self.forward(x)
+        # Forward pass through model (returns x_m from backbone)
+        x_m = self.model.backbone(x, visualize=False)  # (B, 20, 512)
+        
+        # Forward through regression head (no targets for test, just predictions)
+        head_result = self.model.regression(x_m)
+        
+        # Extract results from head
+        y_hat = head_result['prediction_log']  # (B,) - normalized log space
+        y_hat_original = head_result['prediction_original']  # (B,) - original scale
         
         # Metrics (in log space) - only if target is valid (not dummy)
         if y is not None and not (isinstance(y, torch.Tensor) and (y == 0.0).all()):
