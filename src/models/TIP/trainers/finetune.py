@@ -347,8 +347,20 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     print("="*60)
     trainer.fit(model, train_loader, val_loader)
     
-    # Save evaluation results
-    eval_df = pd.DataFrame(trainer.callback_metrics, index=[0])
+    # Save evaluation results (convert tensors to scalars)
+    eval_results = {}
+    for key, value in trainer.callback_metrics.items():
+        if isinstance(value, torch.Tensor):
+            # Convert tensor to scalar
+            if value.numel() == 1:
+                eval_results[key] = value.item()
+            else:
+                # If tensor has multiple elements, convert to list
+                eval_results[key] = value.cpu().numpy().tolist()
+        else:
+            eval_results[key] = value
+    
+    eval_df = pd.DataFrame(eval_results, index=[0])
     eval_df.to_csv(join(logdir, 'eval_results.csv'), index=False)
     
     # Log best validation score
