@@ -141,9 +141,10 @@ class ConstructionCostPrediction(nn.Module):
             
             # Extract regression head weights (with 'model.regression.' prefix)
             regression_state_dict = {}
+            prefix = 'model.regression.'
             for key, value in state_dict.items():
-                if key.startswith('model.regression.'):
-                    regression_key = key[18:]  # Remove 'model.regression.'
+                if key.startswith(prefix):
+                    regression_key = key[len(prefix):]  # Remove 'model.regression.'
                     regression_state_dict[regression_key] = value
             
             if regression_state_dict:
