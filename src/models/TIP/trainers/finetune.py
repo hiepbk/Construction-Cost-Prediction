@@ -297,11 +297,22 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
         mode = 'min'  # Default to min (lower is better)
     
     callbacks = []
+    # Save best checkpoint based on validation metric
     callbacks.append(ModelCheckpoint(
         monitor=f'eval.val.{hparams.eval_metric}',
         mode=mode,
         filename=f'checkpoint_best_{hparams.eval_metric}',
-        dirpath=logdir
+        dirpath=logdir,
+        save_top_k=1,  # Only keep the best checkpoint
+        auto_insert_metric_name=False,
+        verbose=True
+    ))
+    # Also save last epoch checkpoint (similar to pretraining)
+    callbacks.append(ModelCheckpoint(
+        filename='checkpoint_last_epoch_{epoch:02d}',
+        dirpath=logdir,
+        save_on_train_epoch_end=True,
+        auto_insert_metric_name=False
     ))
     callbacks.append(EarlyStopping(
         monitor=f'eval.val.{hparams.eval_metric}',

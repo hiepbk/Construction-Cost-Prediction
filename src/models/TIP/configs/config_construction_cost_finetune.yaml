@@ -29,7 +29,7 @@ checkpoint: null  # Set to: work_dir/runs/multimodal/tip_pretrain_*/checkpoint_b
 # Note: For fine-tuning, we need ground truth, so we use train/val splits (NOT test set)
 
 # K-Fold Cross-Validation Options
-use_kfold: false  # If true, use k-fold CV from unified trainval.csv; if false, use fixed train/val splits
+use_kfold: True  # If true, use k-fold CV from unified trainval.csv; if false, use fixed train/val splits
 k_fold: 5  # Number of folds (only used if use_kfold=true)
 k_fold_seed: 42  # Random seed for k-fold splitting (only used if use_kfold=true)
 k_fold_current: -1  # Current fold to use (0-indexed, 0 to k_fold-1). Set to -1 (default) to run all folds automatically (only used if use_kfold=true)
