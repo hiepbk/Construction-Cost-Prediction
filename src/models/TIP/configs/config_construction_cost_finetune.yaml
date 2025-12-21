@@ -68,10 +68,10 @@ num_classes: 1
 # Only losses in this dict will contribute to the total weighted loss for backprop
 # All losses (rmsle, mae, rmse, mse, huber) are calculated internally for monitoring
 regression_loss:
-  rmsle: 0.5  # Primary metric (competition)
-  mae: 0.2    # Interpretable error
-  mse: 0.2    # Penalize large errors
-  rmse: 0.1   # Root mean squared error
+  rmsle: 1.0  # Primary metric (competition)
+  # mae: 0.2    # Interpretable error
+  # mse: 0.2    # Penalize large errors
+  # rmse: 0.1   # Root mean squared error
 huber_delta: 1.0  # Only used if huber is in regression_loss
 target_log_transform: true
 target_mean: 6.513477  # From preprocessing (log space) - must match pretrain config
