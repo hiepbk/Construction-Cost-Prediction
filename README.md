@@ -401,7 +401,7 @@ python run.py \
 ```bash
 conda activate ccp
 cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
-python run.py \
+python -u run.py \
     --config-name=config_construction_cost_finetune \
     finetune=True \
     checkpoint=/hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/pretrain/tip_pretrain_construction_cost_1219_2130/checkpoint_best_rmsle_99_0.2571.ckpt

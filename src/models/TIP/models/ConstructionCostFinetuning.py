@@ -156,7 +156,7 @@ class ConstructionCostFinetuning(pl.LightningModule):
             x: Tuple of (image, tabular) or (image, tabular, mask)
         
         Returns:
-            prediction: (B, 1) - Predicted cost in log space
+            prediction: (B,) - Predicted cost in normalized log space
         """
         y_hat = self.model(x)
         return y_hat
@@ -397,7 +397,7 @@ class ConstructionCostFinetuning(pl.LightningModule):
         param_groups = []
         
         # Regression head: always trainable
-        regressor_params = list(self.model.backbone.classifier.parameters())
+        regressor_params = list(self.model.regression.parameters())
         if regressor_params:
             regressor_lr = self.hparams.lr_eval * 10.0  # 10x for regression head
             param_groups.append({

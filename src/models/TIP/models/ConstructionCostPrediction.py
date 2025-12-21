@@ -87,10 +87,10 @@ class ConstructionCostPrediction(nn.Module):
                 for key, value in checkpoint['state_dict'].items():
                     if key.startswith('model.backbone.'):
                         new_key = key[15:]  # Remove 'model.backbone.'
-                        # Skip classifier keys - they will be loaded separately
-                        if not new_key.startswith('classifier.'):
+                        # Skip regression head keys - they will be loaded separately
+                        if not new_key.startswith('regression.'):
                             preprocessed_state_dict[new_key] = value
-                    # Skip 'model.classifier.' keys (will be loaded separately)
+                    # Skip 'model.regression.' keys (will be loaded separately)
                 
                 preprocessed_checkpoint = {
                     'hyper_parameters': checkpoint['hyper_parameters'],
@@ -115,11 +115,17 @@ class ConstructionCostPrediction(nn.Module):
             # Set checkpoint path for TIPBackbone (always set so it uses if args.checkpoint: block)
             hparams.checkpoint = checkpoint_path if checkpoint_path else None
         
+        # Create TIPBackbone without classifier (it will return x_m features)
+        # Set create_classifier=False so TIPBackbone doesn't create a classifier
+        with open_dict(hparams):
+            hparams.create_classifier = False
+        
         # Create TIPBackbone (always uses if args.checkpoint: block)
         # If fine-tuning checkpoint, pass preprocessed_checkpoint dict
         self.backbone = TIPBackbone(hparams, checkpoint_dict=preprocessed_checkpoint)
         
-        # Load head from checkpoint (backbone already loaded by TIPBackbone)
+        # Create regression head (separate from backbone)
+        # Load head from checkpoint if available
         if checkpoint:
             self._load_head_from_checkpoint(checkpoint, hparams, is_finetune_checkpoint)
         else:
@@ -130,21 +136,17 @@ class ConstructionCostPrediction(nn.Module):
         """Load head from checkpoint (backbone already loaded by TIPBackbone)."""
         if is_finetune_checkpoint:
             # Fine-tuning checkpoint: Extract head weights from state_dict
-            print("Loading head weights from fine-tuning checkpoint state_dict...")
+            print("Loading regression head weights from fine-tuning checkpoint state_dict...")
             state_dict = checkpoint['state_dict']
             
-            # Extract classifier weights (with 'model.backbone.classifier.' prefix)
-            classifier_state_dict = {}
+            # Extract regression head weights (with 'model.regression.' prefix)
+            regression_state_dict = {}
             for key, value in state_dict.items():
-                if key.startswith('model.backbone.classifier.'):
-                    classifier_key = key[26:]  # Remove 'model.backbone.classifier.'
-                    classifier_state_dict[classifier_key] = value
-                elif key.startswith('model.classifier.'):
-                    # Fallback: some checkpoints might have 'model.classifier.' directly
-                    classifier_key = key[17:]  # Remove 'model.classifier.'
-                    classifier_state_dict[classifier_key] = value
+                if key.startswith('model.regression.'):
+                    regression_key = key[18:]  # Remove 'model.regression.'
+                    regression_state_dict[regression_key] = value
             
-            if classifier_state_dict:
+            if regression_state_dict:
                 # Get head class from checkpoint hyperparameters
                 regression_head_class = getattr(hparams, 'regression_head_class', 'RegressionMLP')
                 print(f"✅ Using regression head class from checkpoint: {regression_head_class}")
@@ -154,7 +156,8 @@ class ConstructionCostPrediction(nn.Module):
                 hidden_dim = getattr(hparams, 'embedding_dim', z_dim)
                 drop_p = getattr(hparams, 'regression_head_dropout', 0.2)
                 
-                self.backbone.classifier = create_head(
+                # Create regression head (always named self.regression)
+                self.regression = create_head(
                     head_name=regression_head_class,
                     n_input=z_dim,
                     n_hidden=hidden_dim,
@@ -162,15 +165,15 @@ class ConstructionCostPrediction(nn.Module):
                 )
                 
                 # Load head weights
-                self.backbone.classifier.load_state_dict(classifier_state_dict)
-                print("✅ Loaded head weights from fine-tuning checkpoint")
+                self.regression.load_state_dict(regression_state_dict)
+                print("✅ Loaded regression head weights from fine-tuning checkpoint")
             else:
-                print("⚠️  Warning: No classifier weights found in fine-tuning checkpoint state_dict")
+                print("⚠️  Warning: No regression head weights found in fine-tuning checkpoint state_dict")
+                print("   Creating new regression head from hparams")
                 self._create_head_from_hparams(hparams)
         else:
             # Pretraining checkpoint: Head is in callback state
-            print("Loading head from pretraining checkpoint callback state...")
-            online_regression_head = None
+            print("Loading regression head from pretraining checkpoint callback state...")
             
             if 'callbacks' in checkpoint:
                 # Find the SSLOnlineEvaluatorRegression callback state
@@ -188,7 +191,8 @@ class ConstructionCostPrediction(nn.Module):
                                 hidden_dim = getattr(hparams, 'embedding_dim', z_dim)
                                 drop_p = getattr(hparams, 'regression_head_dropout', 0.2)
                                 
-                                online_regression_head = create_head(
+                                # Create regression head (always named self.regression)
+                                self.regression = create_head(
                                     head_name=callback_head_class,
                                     n_input=z_dim,
                                     n_hidden=hidden_dim,
@@ -196,22 +200,19 @@ class ConstructionCostPrediction(nn.Module):
                                 )
                                 
                                 # Load the trained weights from pretraining
-                                online_regression_head.load_state_dict(callback_state['state_dict'])
-                                print("✅ Loaded trained online regression head from pretraining checkpoint")
-                                break
+                                self.regression.load_state_dict(callback_state['state_dict'])
+                                print("✅ Loaded trained regression head from pretraining checkpoint")
+                                return  # Successfully loaded, exit
                             except Exception as e:
-                                print(f"⚠️  Warning: Could not load online regression head: {e}")
+                                print(f"⚠️  Warning: Could not load regression head: {e}")
                                 import traceback
                                 traceback.print_exc()
             
-            if online_regression_head is not None:
-                # Replace TIPBackbone's default classifier with the loaded head
-                self.backbone.classifier = online_regression_head
-            else:
-                print("⚠️  WARNING: No online regression head found in pretraining checkpoint!")
-                print("   Using default Linear classifier (random weights)")
-                print("   This will result in poor performance")
-                self._create_head_from_hparams(hparams)
+            # If we get here, no head was loaded from callback
+            print("⚠️  WARNING: No regression head found in pretraining checkpoint callback state!")
+            print("   Creating new regression head from hparams (random weights)")
+            print("   This will result in poor performance")
+            self._create_head_from_hparams(hparams)
     
     def _create_head_from_hparams(self, hparams):
         """Create head from hyperparameters (when no checkpoint available)."""
@@ -222,8 +223,8 @@ class ConstructionCostPrediction(nn.Module):
         hidden_dim = getattr(hparams, 'embedding_dim', z_dim)
         drop_p = getattr(hparams, 'regression_head_dropout', 0.2)
         
-        # Replace default classifier with head from ConstructionCostHead
-        self.backbone.classifier = create_head(
+        # Create regression head (separate from backbone)
+        self.regression = create_head(
             head_name=regression_head_class,
             n_input=z_dim,
             n_hidden=hidden_dim,
@@ -239,7 +240,24 @@ class ConstructionCostPrediction(nn.Module):
             visualize: Whether to return attention maps
         
         Returns:
-            prediction: (B, 1) - Predicted cost in normalized log space
+            If visualize=False:
+                prediction: (B,) - Predicted cost in normalized log space
+            If visualize=True:
+                prediction: (B,) - Predicted cost
+                attn: Attention maps for visualization
         """
-        return self.backbone(x, visualize=visualize)
+        # Get multimodal features from backbone (x_m shape: (B, 20, 512))
+        if visualize:
+            x_m, attn = self.backbone(x, visualize=True)
+        else:
+            x_m = self.backbone(x, visualize=False)
+        
+        # Pass x_m directly to regression head
+        # The regression head will handle aggregation internally
+        prediction = self.regression(x_m)  # (B, 20, 512) -> (B,)
+        
+        if visualize:
+            return prediction, attn
+        else:
+            return prediction
 

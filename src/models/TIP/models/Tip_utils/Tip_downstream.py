@@ -90,8 +90,12 @@ class TIPBackbone(nn.Module):
       if args.share_weights == True:
         tie_encoder_decoder_weights(self.encoder_tabular, self.encoder_multimodal, '', '/mlp')
 
-    # Classification or Regression head (always use simple Linear, will be replaced by ConstructionCostPrediction if needed)
-    self.classifier = nn.Linear(self.hidden_dim, args.num_classes)
+    # Classification or Regression head (optional, only created if needed)
+    # For ConstructionCostPrediction, we don't create classifier here
+    # The head will be created in ConstructionCostPrediction instead
+    self.classifier = None
+    if getattr(args, 'create_classifier', True):
+      self.classifier = nn.Linear(self.hidden_dim, args.num_classes)
 
 
   def create_imaging_model(self, args):
@@ -172,13 +176,12 @@ class TIPBackbone(nn.Module):
     else:
       x_m, attn = self.encoder_multimodal(x=x_t, image_features=x_i, visualize=visualize)
     
-    # Classification/Regression
-    x = self.classifier(x_m[:,0,:])
-
+    # Return x_m (multimodal features) instead of classifier output
+    # The classifier/regression head is handled by ConstructionCostPrediction
     if visualize==False:
-      return x
+      return x_m
     else:
-      return x, attn
+      return x_m, attn
 
 
 if __name__ == "__main__":

@@ -16,10 +16,11 @@ from torch import Tensor, nn
 class RegressionMLP(nn.Module):
     """
     Simple MLP for regression evaluation.
-    Takes frozen embeddings and predicts a scalar target.
+    Takes multimodal features (sequence of tokens) and predicts a scalar target.
     
     Architecture:
-    - Input: (B, n_input)
+    - Input: (B, N, n_input) where N is sequence length (e.g., 20 tokens)
+    - Aggregation: Mean pooling over sequence dimension -> (B, n_input)
     - Hidden 1: Linear(n_input, n_hidden) -> BatchNorm -> ReLU -> Dropout
     - Hidden 2: Linear(n_hidden, n_hidden//2) -> BatchNorm -> ReLU -> Dropout
     - Output: Linear(n_hidden//2, 1)
@@ -54,6 +55,23 @@ class RegressionMLP(nn.Module):
         )
     
     def forward(self, x: Tensor) -> Tensor:
+        """
+        Forward pass.
+        
+        Args:
+            x: (B, N, n_input) - Multimodal features (sequence of tokens)
+        
+        Returns:
+            (B,) - Scalar predictions
+        """
+        # Aggregate all tokens using mean pooling
+        # This uses information from all tokens (CLS + feature tokens)
+        if x.dim() == 3:
+            # x is (B, N, n_input) - aggregate over sequence dimension
+            x = x.mean(dim=1)  # (B, N, n_input) -> (B, n_input)
+        # If x is already (B, n_input), pass through directly
+        
+        # Pass through MLP
         return self.mlp(x).squeeze(-1)  # (B, 1) -> (B,)
 
 
