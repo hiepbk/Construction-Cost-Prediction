@@ -297,11 +297,14 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
         mode = 'min'  # Default to min (lower is better)
     
     callbacks = []
-    # Save best checkpoint based on validation metric
+    # Save best checkpoint based on validation metric (include metric value in filename)
+    metric_key = f'eval.val.{hparams.eval_metric}'
+    # Format: checkpoint_best_{metric}_{epoch:02d}_{metric_value:.4f}
+    # Use double braces {{ }} so PyTorch Lightning can format them
     callbacks.append(ModelCheckpoint(
-        monitor=f'eval.val.{hparams.eval_metric}',
+        monitor=metric_key,
         mode=mode,
-        filename=f'checkpoint_best_{hparams.eval_metric}',
+        filename=f'checkpoint_best_{hparams.eval_metric}_{{epoch:02d}}_{{{metric_key}:.4f}}',
         dirpath=logdir,
         save_top_k=1,  # Only keep the best checkpoint
         auto_insert_metric_name=False,
