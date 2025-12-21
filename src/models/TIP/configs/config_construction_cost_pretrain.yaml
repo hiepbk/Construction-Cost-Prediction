@@ -80,8 +80,8 @@ projection_dim: 128
 batch_size: 32
 lr: 3e-4
 weight_decay: 1e-5
-lr_eval: 1e-3  # For fine-tuning stage
-weight_decay_eval: 1e-5  # For fine-tuning stage
+lr_finetune: 1e-3  # For fine-tuning stage
+weight_decay_finetune: 1e-5  # For fine-tuning stage
 max_epochs: 100
 check_val_every_n_epoch: 5
 log_every_n_steps: 1  # Log every step (since we have small number of batches)

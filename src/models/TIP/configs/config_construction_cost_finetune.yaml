@@ -91,8 +91,8 @@ regression_head:
 batch_size: 32
 lr: 3e-4  # Pretrain LR (not used in fine-tuning, but required by run.py)
 weight_decay: 1e-5  # Pretrain weight decay (not used in fine-tuning, but required by run.py)
-lr_eval: 1e-3  # Fine-tuning learning rate (used for regression head)
-weight_decay_eval: 1e-5  # Fine-tuning weight decay
+lr_finetune: 1e-4  # Fine-tuning learning rate (used for regression head)
+weight_decay_finetune: 1e-5  # Fine-tuning weight decay
 max_epochs: 200
 log_every_n_steps: 1  # Log every step (since we have small number of batches ~13)
 

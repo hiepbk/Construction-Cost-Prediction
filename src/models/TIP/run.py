@@ -78,7 +78,7 @@ def run(args: DictConfig):
   
   print('Comment: ', args.comment)
   print(f'Pretrain LR: {args.lr}, Decay: {args.weight_decay}')
-  print(f'Finetune LR: {args.lr_eval}, Decay: {args.weight_decay_eval}')
+  print(f'Finetune LR: {args.lr_finetune}, Decay: {args.weight_decay_finetune}')
   print(f'Corruption rate: {args.corruption_rate}, temperature: {args.temperature}')
   if args.algorithm_name == 'TIP':
     print('Special Replace Ratio: ', args.replace_special_rate)

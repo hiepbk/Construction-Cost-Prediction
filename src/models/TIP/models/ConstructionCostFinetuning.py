@@ -414,7 +414,7 @@ class ConstructionCostFinetuning(pl.LightningModule):
         # Regression head: always trainable
         regressor_params = list(self.model.regression.parameters())
         if regressor_params:
-            regressor_lr = self.hparams.lr_eval * 10.0  # 10x for regression head
+            regressor_lr = self.hparams.lr_finetune * 10.0  # 10x for regression head
             param_groups.append({
                 'params': regressor_params,
                 'lr': regressor_lr
@@ -428,14 +428,14 @@ class ConstructionCostFinetuning(pl.LightningModule):
             if multimodal_params:
                 param_groups.append({
                     'params': multimodal_params,
-                    'lr': self.hparams.lr_eval
+                    'lr': self.hparams.lr_finetune
                 })
-                print(f"✅ Multimodal encoder: trainable, LR={self.hparams.lr_eval:.2e}")
+                print(f"✅ Multimodal encoder: trainable, LR={self.hparams.lr_finetune:.2e}")
             
             # Tabular encoder: base LR (or lower if freeze_tabular=True)
             tabular_params = list(self.model.backbone.encoder_tabular.parameters())
             if tabular_params and not getattr(self.hparams, 'freeze_tabular', False):
-                tabular_lr = self.hparams.lr_eval * 0.1 if getattr(self.hparams, 'freeze_tabular', False) else self.hparams.lr_eval
+                tabular_lr = self.hparams.lr_finetune * 0.1 if getattr(self.hparams, 'freeze_tabular', False) else self.hparams.lr_finetune
                 param_groups.append({
                     'params': tabular_params,
                     'lr': tabular_lr
@@ -445,7 +445,7 @@ class ConstructionCostFinetuning(pl.LightningModule):
             # Image encoder: lower LR (or frozen)
             image_params = list(self.model.backbone.encoder_imaging.parameters())
             if image_params and not getattr(self.hparams, 'freeze_image', True):
-                image_lr = self.hparams.lr_eval * 0.01 if getattr(self.hparams, 'freeze_image', True) else self.hparams.lr_eval * 0.1
+                image_lr = self.hparams.lr_finetune * 0.01 if getattr(self.hparams, 'freeze_image', True) else self.hparams.lr_finetune * 0.1
                 param_groups.append({
                     'params': image_params,
                     'lr': image_lr
@@ -470,8 +470,8 @@ class ConstructionCostFinetuning(pl.LightningModule):
         
         optimizer = torch.optim.AdamW(
             param_groups,
-            lr=self.hparams.lr_eval,
-            weight_decay=getattr(self.hparams, 'weight_decay_eval', 1e-5)
+            lr=self.hparams.lr_finetune,
+            weight_decay=getattr(self.hparams, 'weight_decay_finetune', 1e-5)
         )
         
         # Scheduler
