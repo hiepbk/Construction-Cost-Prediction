@@ -142,10 +142,10 @@ num_classes: 1  # For regression
 # Only losses in this dict will contribute to the total weighted loss for backprop
 # All losses (rmsle, mae, rmse, mse, huber) are calculated internally for monitoring
 regression_loss:
-  rmsle: 0.5  # Primary metric (competition)
-  mae: 0.2    # Interpretable error
-  mse: 0.2    # Penalize large errors
-  rmse: 0.1   # Root mean squared error
+  rmsle: 1.0  # Primary metric (competition)
+  # mae: 0.2    # Interpretable error
+  # mse: 0.2    # Penalize large errors
+  # rmse: 0.1   # Root mean squared error
 regression_head_class: RegressionMLP  # Head class name from ConstructionCostHead module (must match class name exactly)
 regression_head_dropout: 0.2  # Dropout probability for regression head
 huber_delta: 1.0  # Delta parameter for Huber loss

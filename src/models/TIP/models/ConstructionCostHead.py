@@ -94,12 +94,13 @@ class RegressionMLP(nn.Module):
             'mae': nn.L1Loss(),
             'mse': nn.MSELoss(),
             'rmsle': None,  # RMSLE is computed manually
+            'rmse': None,   # RMSE is computed from MSE (sqrt of MSE)
         }
         
         # Validate that all losses in config are supported
         for loss_name in self.loss_config.keys():
             if loss_name not in self.loss_fns:
-                raise ValueError(f"Unknown loss type: {loss_name}. Supported: 'rmsle', 'huber', 'mae', 'mse'")
+                raise ValueError(f"Unknown loss type: {loss_name}. Supported: 'rmsle', 'huber', 'mae', 'mse', 'rmse'")
     
     def forward(
         self, 
@@ -200,6 +201,7 @@ class RegressionMLP(nn.Module):
                 - 'huber': (scalar) - Huber loss (always calculated)
                 - 'mae': (scalar) - MAE loss (always calculated)
                 - 'mse': (scalar) - MSE loss (always calculated)
+                - 'rmse': (scalar) - RMSE loss (always calculated, sqrt of MSE)
         """
         loss_dict = {}
         total_loss = 0.0
