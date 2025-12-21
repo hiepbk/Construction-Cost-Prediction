@@ -88,6 +88,9 @@ class RegressionMLP(nn.Module):
             nn.Linear(n_hidden // 2, 1)  # Single output for regression
         )
         
+        # Initialize weights properly for regression with ReLU
+        self._initialize_weights()
+        
         # Initialize loss functions for ALL possible losses (for monitoring)
         # We calculate all losses, but only weight those in loss_config
         self.loss_fns = {
@@ -102,6 +105,26 @@ class RegressionMLP(nn.Module):
         for loss_name in self.loss_config.keys():
             if loss_name not in self.loss_fns:
                 raise ValueError(f"Unknown loss type: {loss_name}. Supported: 'rmsle', 'huber', 'mae', 'mse', 'rmse'")
+    
+    def _initialize_weights(self):
+        """Initialize weights using Kaiming/He initialization for ReLU layers."""
+        for module in self.mlp:
+            if isinstance(module, nn.Linear):
+                # Kaiming/He initialization for ReLU (recommended for ReLU activations)
+                nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
+                if module.bias is not None:
+                    # Initialize bias to small positive value to avoid dead ReLU
+                    nn.init.constant_(module.bias, 0.01)
+                # For output layer, initialize to predict near zero (will be normalized)
+                if module == self.mlp[-1]:  # Last layer (output)
+                    nn.init.normal_(module.weight, mean=0.0, std=0.01)
+                    if module.bias is not None:
+                        # Initialize output bias to predict near normalized mean (target_mean)
+                        nn.init.constant_(module.bias, self.target_mean)
+            elif isinstance(module, nn.BatchNorm1d):
+                # BatchNorm: weight=1, bias=0 (standard)
+                nn.init.constant_(module.weight, 1.0)
+                nn.init.constant_(module.bias, 0.0)
     
     def forward(
         self, 
@@ -362,6 +385,9 @@ class MixtureOfExpertsRegression(nn.Module):
             for _ in range(num_experts)
         ])
         
+        # Initialize weights properly for regression with ReLU
+        self._initialize_weights()
+        
         # Initialize loss functions for ALL possible losses (for monitoring)
         # We calculate all losses, but only weight those in loss_config
         self.loss_fns = {
@@ -376,6 +402,35 @@ class MixtureOfExpertsRegression(nn.Module):
         for loss_name in self.loss_config.keys():
             if loss_name not in self.loss_fns:
                 raise ValueError(f"Unknown loss type: {loss_name}. Supported: 'rmsle', 'huber', 'mae', 'mse', 'rmse'")
+    
+    def _initialize_weights(self):
+        """Initialize weights using Kaiming/He initialization for ReLU layers."""
+        # Initialize gating network
+        for module in self.gating:
+            if isinstance(module, nn.Linear):
+                # Kaiming/He initialization for ReLU
+                nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0.01)
+        
+        # Initialize expert networks
+        for expert in self.experts:
+            for module in expert:
+                if isinstance(module, nn.Linear):
+                    # Kaiming/He initialization for ReLU
+                    nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
+                    if module.bias is not None:
+                        nn.init.constant_(module.bias, 0.01)
+                    # For output layer, initialize to predict near zero
+                    if module == expert[-1]:  # Last layer (output)
+                        nn.init.normal_(module.weight, mean=0.0, std=0.01)
+                        if module.bias is not None:
+                            # Initialize output bias to predict near normalized mean
+                            nn.init.constant_(module.bias, self.target_mean)
+                elif isinstance(module, nn.BatchNorm1d):
+                    # BatchNorm: weight=1, bias=0 (standard)
+                    nn.init.constant_(module.weight, 1.0)
+                    nn.init.constant_(module.bias, 0.0)
     
     def _top_k_routing(self, weights: Tensor) -> Tensor:
         """
