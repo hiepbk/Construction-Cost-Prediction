@@ -84,8 +84,15 @@ def evaluate_validation(
     all_targets = []
     all_data_ids = []
     
+    # Calculate total batches for progress
+    total_batches = len(val_loader)
+    print(f"Total batches: {total_batches}")
     with torch.no_grad():
-        for batch in val_loader:
+        for batch_idx, batch in enumerate(val_loader):
+            # Print progress for every batch (single line, updates in place)
+            progress_pct = 100 * (batch_idx + 1) / total_batches
+            print(f"\r  Validation: {batch_idx + 1}/{total_batches} batches ({progress_pct:.1f}%)", end='', flush=True)
+            
             # Unpack batch: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)
             if len(batch) != 8:
                 raise ValueError(f"Expected batch size 8, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)")
@@ -222,8 +229,15 @@ def run_inference(
     all_predictions = []
     all_data_ids = []
     
+    # Calculate total batches for progress
+    total_batches = len(test_loader)
+    print(f"Total batches: {total_batches}")
     with torch.no_grad():
-        for batch in test_loader:
+        for batch_idx, batch in enumerate(test_loader):
+            # Print progress for every batch (single line, updates in place)
+            progress_pct = 100 * (batch_idx + 1) / total_batches
+            print(f"\r  Test inference: {batch_idx + 1}/{total_batches} batches ({progress_pct:.1f}%)", end='', flush=True)
+            
             # Unpack batch: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)
             if len(batch) != 8:
                 raise ValueError(f"Expected batch size 8, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)")
@@ -265,6 +279,10 @@ def run_inference(
             # Store data IDs (data_id is a list from the batch)
             if data_id is not None:
                 all_data_ids.extend(data_id)
+        
+        print()  # New line after progress
+        
+        print()  # New line after progress
     
     # Concatenate all predictions
     all_predictions = torch.cat(all_predictions, dim=0).numpy()
@@ -298,9 +316,11 @@ def run_inference(
     
     # Save submission
     submission_df.to_csv(output_path, index=False)
-    print(f"\n✅ Submission saved to: {output_path}")
+    print(f"\n✅ Inference complete! Processed {len(all_predictions)} test samples")
+    print(f"✅ Submission saved to: {output_path}")
     print(f"   Number of predictions: {len(submission_df)}")
     print(f"   Prediction range: [{all_predictions.min():.2f}, {all_predictions.max():.2f}] USD/m²")
+    print("="*60)
     print(f"   Prediction mean: {all_predictions.mean():.2f} USD/m²")
     print(f"   Prediction std: {all_predictions.std():.2f} USD/m²")
 
@@ -323,8 +343,8 @@ def main():
                         help='Path to validation metadata.pkl file')
     parser.add_argument('--test_metadata', type=str, required=True,
                         help='Path to test metadata.pkl file')
-    parser.add_argument('--output_dir', type=str, default='work_dir/evaluation',
-                        help='Output directory for results')
+    parser.add_argument('--output_dir', type=str, default=None,
+                        help='Output directory for results (if None, will use checkpoint directory/evaluation/)')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='Batch size for evaluation')
     parser.add_argument('--num_workers', type=int, default=4,
@@ -336,8 +356,20 @@ def main():
     
     args = parser.parse_args()
     
-    # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
+    # Always use checkpoint directory for evaluation (ignore --output_dir if provided)
+    # Extract checkpoint directory and create evaluation folder structure
+    checkpoint_dir = os.path.dirname(os.path.abspath(args.checkpoint))
+    args.output_dir = os.path.join(checkpoint_dir, 'evaluation')
+    print(f"Using checkpoint directory for evaluation: {checkpoint_dir}")
+    
+    # Create evaluation folder structure
+    val_eval_dir = os.path.join(args.output_dir, 'val_evaluation')
+    test_submission_dir = os.path.join(args.output_dir, 'test_submission')
+    os.makedirs(val_eval_dir, exist_ok=True)
+    os.makedirs(test_submission_dir, exist_ok=True)
+    print(f"Evaluation folders created:")
+    print(f"  - Validation: {val_eval_dir}")
+    print(f"  - Test submission: {test_submission_dir}")
     
     # Set device
     device = torch.device(args.device)
@@ -434,12 +466,13 @@ def main():
     print("\n" + "="*60)
     print("EVALUATING ON VALIDATION SET")
     print("="*60)
+    # Use val_evaluation directory for validation results (already created above)
     metrics, val_predictions, val_data_ids = evaluate_validation(
         model=model,
         val_loader=val_loader,
         device=device,
         save_predictions=True,
-        output_dir=args.output_dir,
+        output_dir=val_eval_dir,
         checkpoint_path=args.checkpoint,
         target_mean=target_mean,
         target_std=target_std,
@@ -476,7 +509,8 @@ def main():
     print("\n" + "="*60)
     print("RUNNING INFERENCE ON TEST SET")
     print("="*60)
-    submission_path = os.path.join(args.output_dir, 'submission.csv')
+    # Use test_submission directory for test results (already created above)
+    submission_path = os.path.join(test_submission_dir, 'submission.csv')
     run_inference(
         model=model,
         test_loader=test_loader,
@@ -494,7 +528,8 @@ def main():
     print("="*60)
     print(f"Results saved to: {args.output_dir}")
     print(f"  - Validation metrics: RMSLE={metrics.get('rmsle', 'N/A'):.6f}")
-    print(f"  - Submission file: {submission_path}")
+    print(f"  - Validation predictions: {val_eval_dir}")
+    print(f"  - Test submission: {submission_path}")
 
 
 if __name__ == '__main__':

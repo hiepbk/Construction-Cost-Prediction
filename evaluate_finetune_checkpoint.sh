@@ -12,8 +12,7 @@ python evaluate_construction_cost.py \
     --field_lengths /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/field_lengths.pt \
     --val_metadata /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean_metadata.pkl \
     --test_metadata /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/test/test_clean_metadata.pkl \
-    --output_dir /hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/evaluation \
     --batch_size 32 \
-    --num_workers 4 \
+    --num_workers 2 \
     --device cuda
 
