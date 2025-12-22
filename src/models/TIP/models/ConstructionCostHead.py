@@ -876,6 +876,10 @@ class AttentionAggregationRegression(nn.Module):
         # To get back: x = prediction_log * std + mean
         pred_log = prediction_log * self.target_std + self.target_mean
         
+        # Clamp pred_log to prevent exp overflow (log space: reasonable range is ~[-10, 20])
+        # This prevents exp(pred_log) from becoming inf
+        pred_log = torch.clamp(pred_log, min=-10.0, max=20.0)
+        
         # Step 2: Inverse log transform (if log-transformed)
         if self.target_log_transform:
             # Inverse of log1p: exp(x) - 1
@@ -885,6 +889,20 @@ class AttentionAggregationRegression(nn.Module):
         
         # Ensure non-negative (construction cost can't be negative)
         pred_original = torch.clamp(pred_original, min=0.0)
+        
+        # Additional safety: clamp to reasonable maximum (e.g., 1e6 USD/m²) to prevent inf
+        pred_original = torch.clamp(pred_original, min=0.0, max=1e6)
+        
+        # Check for NaN/Inf and replace with a safe value
+        if torch.any(torch.isnan(pred_original)) or torch.any(torch.isinf(pred_original)):
+            # Replace NaN/Inf with median of valid predictions or a safe default
+            valid_mask = torch.isfinite(pred_original)
+            if torch.any(valid_mask):
+                safe_value = torch.median(pred_original[valid_mask])
+            else:
+                # Fallback: use exp(target_mean) as safe value
+                safe_value = torch.exp(torch.tensor(self.target_mean, device=pred_original.device))
+            pred_original = torch.where(torch.isfinite(pred_original), pred_original, safe_value)
         
         return pred_original
     

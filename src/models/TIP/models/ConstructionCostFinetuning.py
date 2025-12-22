@@ -261,6 +261,25 @@ class ConstructionCostFinetuning(pl.LightningModule):
         loss = head_result['loss']  # scalar - total weighted loss
         loss_dict = head_result['loss_dict']  # dict with all individual losses
         
+        # Safety check: Detect NaN/Inf and replace with safe values to prevent DDP hang
+        if torch.any(torch.isnan(loss)) or torch.isinf(loss):
+            # Replace with a large but finite value
+            loss = torch.tensor(1e6, device=loss.device, dtype=loss.dtype)
+            # Also fix loss_dict
+            for k, v in loss_dict.items():
+                if torch.any(torch.isnan(v)) or torch.any(torch.isinf(v)):
+                    loss_dict[k] = torch.tensor(1e6, device=v.device, dtype=v.dtype)
+        
+        # Check predictions for NaN/Inf
+        if torch.any(torch.isnan(y_hat_original)) or torch.any(torch.isinf(y_hat_original)):
+            # Replace with median of valid predictions or safe default
+            valid_mask = torch.isfinite(y_hat_original)
+            if torch.any(valid_mask):
+                safe_value = torch.median(y_hat_original[valid_mask])
+            else:
+                safe_value = torch.tensor(1000.0, device=y_hat_original.device)  # Default: 1000 USD/m²
+            y_hat_original = torch.where(torch.isfinite(y_hat_original), y_hat_original, safe_value)
+        
         # Use y_original directly (already in original scale from dataloader)
         y_true_original = y_original.squeeze() if y_original is not None else None
         
@@ -309,6 +328,14 @@ class ConstructionCostFinetuning(pl.LightningModule):
         rmse_val = torch.stack([loss_dict['rmse'] for loss_dict in self.val_losses if 'rmse' in loss_dict]).mean()
         rmsle_val = torch.stack([loss_dict['rmsle'] for loss_dict in self.val_losses if 'rmsle' in loss_dict]).mean()
         
+        # Safety check: Replace NaN/Inf with large but finite values
+        if torch.isnan(mae_val) or torch.isinf(mae_val):
+            mae_val = torch.tensor(1e6, device=mae_val.device)
+        if torch.isnan(rmse_val) or torch.isinf(rmse_val):
+            rmse_val = torch.tensor(1e6, device=rmse_val.device)
+        if torch.isnan(rmsle_val) or torch.isinf(rmsle_val):
+            rmsle_val = torch.tensor(1e6, device=rmsle_val.device)
+        
         # Convert to float for logging
         mae_val = float(mae_val.item())
         rmse_val = float(rmse_val.item())
@@ -337,12 +364,12 @@ class ConstructionCostFinetuning(pl.LightningModule):
                     # The logged value is the FINAL prediction in USD/m² (original scale)
                     self.log(f"regression/{title}", pred_val, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         
-        # Track best metrics
-        if mae_val < self.best_val_mae:
+        # Track best metrics (only update if value is finite and better)
+        if not (mae_val == float('inf') or mae_val != mae_val) and mae_val < self.best_val_mae:
             self.best_val_mae = mae_val
-        if rmse_val < self.best_val_rmse:
+        if not (rmse_val == float('inf') or rmse_val != rmse_val) and rmse_val < self.best_val_rmse:
             self.best_val_rmse = rmse_val
-        if rmsle_val < self.best_val_rmsle:
+        if not (rmsle_val == float('inf') or rmsle_val != rmsle_val) and rmsle_val < self.best_val_rmsle:
             self.best_val_rmsle = rmsle_val
         
         # Set best_val_score based on eval_metric (for compatibility with evaluate.py)

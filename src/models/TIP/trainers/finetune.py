@@ -375,8 +375,13 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
         if metric_key in trainer.callback_metrics:
             best_score = trainer.callback_metrics[metric_key].item()
     
-    if best_score is not None:
+    # Check if best_score is valid (not inf or nan)
+    if best_score is not None and best_score != float('inf') and best_score == best_score:  # best_score == best_score checks for NaN
         print(f"\n✅ Best validation {hparams.eval_metric}: {best_score:.6f}")
+    elif best_score == float('inf'):
+        print(f"\n⚠️  Best validation {hparams.eval_metric}: inf (no valid validation metrics recorded - check for NaN/Inf issues)")
+    elif best_score is not None and best_score != best_score:  # NaN check
+        print(f"\n⚠️  Best validation {hparams.eval_metric}: NaN (validation metrics contained NaN values)")
     else:
         print(f"\n⚠️  Could not determine best validation score")
     
