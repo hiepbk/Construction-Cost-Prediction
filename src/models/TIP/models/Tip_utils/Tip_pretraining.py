@@ -202,9 +202,13 @@ class Pretraining(pl.LightningModule):
   def forward_multimodal_feature(self, tabular_features: torch.Tensor, image_features: torch.Tensor) -> torch.Tensor:
     """
     Generates feature of tabular data.
+    Returns full sequence (B, N, n_input) for regression heads that need all tokens (e.g., AttentionAggregationRegression).
+    Previously returned only CLS token y[:,0,:] for classification, but regression heads benefit from full sequence.
     """
     y = self.encoder_multimodal(x=tabular_features, image_features=image_features)
-    return y[:,0,:]
+    # Return full sequence (B, N, n_input) instead of just CLS token
+    # This allows regression heads (like AttentionAggregationRegression) to aggregate all tokens
+    return y  # (B, N, n_input) - e.g., (B, 20, 512)
 
   def calc_and_log_train_embedding_acc(self, logits, labels, modality: str) -> None:
     # Skip for regression tasks

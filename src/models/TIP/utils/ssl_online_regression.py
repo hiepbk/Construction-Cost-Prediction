@@ -103,6 +103,14 @@ class SSLOnlineEvaluatorRegression(Callback):
             n_input=self.z_dim
         ).to(pl_module.device)
         
+        # Print head architecture for debugging
+        if trainer.global_rank == 0:  # Only print on main process
+            print("\n" + "="*80)
+            print("ONLINE REGRESSION HEAD ARCHITECTURE:")
+            print("="*80)
+            print(self.online_evaluator)
+            print("="*80 + "\n")
+        
         # Initialize optimizer
         self.optimizer = torch.optim.Adam(
             self.online_evaluator.parameters(),

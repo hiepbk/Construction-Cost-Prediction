@@ -138,6 +138,7 @@ class ConstructionCostPrediction(nn.Module):
         """Load head from checkpoint (backbone already loaded by TIPBackbone)."""
         # Always create head from current config first
         head_config = self._build_head_config(hparams)
+        print(f"Head config: {head_config}")
         z_dim = hparams.multimodal_embedding_dim
         self.regression = create_head(
             head_config=head_config,
@@ -178,11 +179,16 @@ class ConstructionCostPrediction(nn.Module):
                         callback_state = checkpoint['callbacks'][key]
                         if 'state_dict' in callback_state:
                             # Get head class name from callback state (what was used in pretraining)
-                            callback_head_class = callback_state.get('regression_head_class', 'RegressionMLP')
+                            callback_head_class = callback_state.get('regression_head_class', None)
+                            if callback_head_class is None:
+                                print(f"⚠️  Warning: No regression head class found in pretraining checkpoint callback state")
+                                print(f"   Continuing with random initialization for '{current_head_type}' head.")
+                                return  # Done (either loaded or skipped)
                             print(f"✅ Found online regression head class in pretraining checkpoint: {callback_head_class}")
+                            print(f"   Current head type: {current_head_type}")
                             
-                            # Check if checkpoint's head class matches current config's head class
-                            if callback_head_class == current_head_type:
+                            # Check if checkpoint's head class exactly matches current config's head class
+                            if callback_head_class.lower() == current_head_type.lower():
                                 # Head types match - try to load weights
                                 try:
                                     self.regression.load_state_dict(callback_state['state_dict'])

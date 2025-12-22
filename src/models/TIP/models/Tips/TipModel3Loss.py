@@ -54,6 +54,9 @@ class TIP3Loss(Pretraining):
     def cal_image_tabular_matching_loss(self, image_embeddings: torch.Tensor, tabular_embeddings: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
         current_device = image_embeddings.device
         output_pos = self.forward_multimodal_feature(tabular_features=tabular_embeddings, image_features=image_embeddings)
+        # Extract CLS token (first token) for ITM head: (B, N, n_input) -> (B, n_input)
+        if output_pos.dim() == 3:
+            output_pos = output_pos[:, 0, :]  # Take CLS token
         B = image_embeddings.shape[0]
         # get negative pairs
         with torch.no_grad():
@@ -75,6 +78,9 @@ class TIP3Loss(Pretraining):
         tabular_embeddings_all = torch.cat([tabular_embeddings, tabular_embeddings_neg], dim=0)
         image_embeddings_all = torch.cat([image_embeddings_neg, image_embeddings], dim=0)
         output_neg = self.forward_multimodal_feature(tabular_features=tabular_embeddings_all, image_features=image_embeddings_all)
+        # Extract CLS token (first token) for ITM head: (B, N, n_input) -> (B, n_input)
+        if output_neg.dim() == 3:
+            output_neg = output_neg[:, 0, :]  # Take CLS token
         z = self.itm_head(torch.cat([output_pos, output_neg], dim=0))
         itm_labels = torch.cat([torch.ones(B), torch.zeros(2*B)], dim=0).long().to(logits.device)
         loss_itm = self.criterion_itm(z, itm_labels)

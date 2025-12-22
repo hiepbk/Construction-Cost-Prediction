@@ -29,16 +29,18 @@ checkpoint: null  # Set to: work_dir/runs/multimodal/tip_pretrain_*/checkpoint_b
 # Note: For fine-tuning, we need ground truth, so we use train/val splits (NOT test set)
 
 # K-Fold Cross-Validation Options
-use_kfold: True  # If true, use k-fold CV from unified trainval.csv; if false, use fixed train/val splits
+use_kfold: False  # If true, use k-fold CV from unified trainval.csv; if false, use fixed train/val splits
 k_fold: 5  # Number of folds (only used if use_kfold=true)
 k_fold_seed: 42  # Random seed for k-fold splitting (only used if use_kfold=true)
-k_fold_current: 1  # Current fold to use (0-indexed, 0 to k_fold-1). Set to -1 (default) to run all folds automatically (only used if use_kfold=true)
+k_fold_current: -1  # Current fold to use (0-indexed, 0 to k_fold-1). Set to -1 (default) to run all folds automatically (only used if use_kfold=true)
 data_trainval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval/trainval_clean.csv  # Unified trainval CSV (preprocessed, only used if use_kfold=true)
 
 # Fixed Split Options (only used if use_kfold=false)
-data_train_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean.csv
+# data_train_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean.csv
+data_train_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval/trainval_clean.csv
 data_val_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean.csv  # Val split (has ground truth)
-train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean_metadata.pkl
+# train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean_metadata.pkl
+train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/trainval_clean_metadata.pkl
 val_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean_metadata.pkl
 
 # Common paths (used for both k-fold and fixed split)
@@ -97,6 +99,24 @@ regression_head:
   # top_k: 2  # Top-K routing: number of experts to use per sample
   # use_load_balancing: false  # Enable load balancing loss
   # load_balancing_weight: 0.01  # Weight for load balancing loss
+
+# regression_head:
+#   type: RegressionMLP2  # Head class name: RegressionMLP or MixtureOfExpertsRegression
+#   p: 0.2  # Dropout probability
+#   n_hidden: null  # Hidden dimension (null = use n_input, which is embedding_dim)
+#   # Loss configuration (dict with loss names and weights)
+#   # Only losses in this dict will contribute to the total weighted loss for backprop
+#   # All losses (rmsle, mae, rmse, mse, huber) are calculated internally for monitoring
+#   loss_type:
+#     rmsle: 1.0  # Primary metric (competition)
+#     # mae: 0.2    # Interpretable error
+#     # mse: 0.2    # Penalize large errors
+#     # rmse: 0.1   # Root mean squared error
+#   target_mean: 6.513477  # Mean of log(1 + target) values (computed from training dataset)
+#   target_std: 1.101045   # Std of log(1 + target) values (computed from training dataset)
+#   target_log_transform: true  # Whether targets are log-transformed (log1p)
+#   huber_delta: 1.0  # Delta parameter for Huber loss
+
 
 # Training
 batch_size: 32
