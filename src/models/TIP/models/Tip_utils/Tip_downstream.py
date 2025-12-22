@@ -128,7 +128,7 @@ class TIPBackbone(nn.Module):
     for k in list(state_dict.keys()):
       if k.startswith(module_name) and not 'projection_head' in k and not 'prototypes' in k:
         state_dict_module[k[len(module_name):]] = state_dict[k]
-    print(f'Load {len(state_dict_module)}/{len(state_dict)} weights for {module_name}')
+    print(f'✅ Loaded {len(state_dict_module)}/{len(state_dict)} weights for {module_name}')
     log = module.load_state_dict(state_dict_module, strict=True)
     assert len(log.missing_keys) == 0
 

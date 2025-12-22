@@ -67,10 +67,7 @@ def evaluate_validation(
     device: torch.device,
     save_predictions: bool = True,
     output_dir: str = None,
-    checkpoint_path: Optional[str] = None,
-    target_mean: float = 0.0,
-    target_std: float = 1.0,
-    target_log_transform: bool = True
+    checkpoint_path: Optional[str] = None
 ) -> dict:
     """
     Evaluate model on validation set.
@@ -199,10 +196,7 @@ def run_inference(
     device: torch.device,
     output_path: str,
     checkpoint_path: Optional[str] = None,
-    data_ids: list = None,
-    target_mean: float = 0.0,
-    target_std: float = 1.0,
-    target_log_transform: bool = True
+    data_ids: list = None
 ):
     """
     Run inference on test set and generate submission CSV.
@@ -387,23 +381,36 @@ def main():
     
     model = model.to(device)
     
-    # Load target normalization stats from config file only
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, 'configs', 'config_construction_cost_pretrain.yaml')
+    # Extract target normalization stats from checkpoint hyperparameters (for display only)
+    # NOTE: The head already handles decoding internally, so these are just for logging
+    # The head's forward() returns prediction_original which is already in USD/m² scale
+    target_mean = None
+    target_std = None
+    target_log_transform = None
     
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Config file not found: {config_path}")
+    # Check if regression_head config exists (new nested format)
+    if hasattr(hparams, 'regression_head') and isinstance(hparams.regression_head, (dict, DictConfig)):
+        regression_head = hparams.regression_head
+        if isinstance(regression_head, DictConfig):
+            regression_head = OmegaConf.to_container(regression_head, resolve=True)
+        target_mean = float(regression_head.get('target_mean', 0.0))
+        target_std = float(regression_head.get('target_std', 1.0))
+        target_log_transform = bool(regression_head.get('target_log_transform', True))
+    # Fallback to flat hparams (old format)
+    elif hasattr(hparams, 'target_mean') and hasattr(hparams, 'target_std'):
+        target_mean = float(hparams.target_mean)
+        target_std = float(hparams.target_std)
+        target_log_transform = bool(getattr(hparams, 'target_log_transform', True))
     
-    config = OmegaConf.load(config_path)
-    target_mean = float(config.get('target_mean', 0.0))
-    target_std = float(config.get('target_std', 1.0))
-    target_log_transform = bool(config.get('target_log_transform', True))
-    
+    # Display model info
     print(f"Model initialized (from checkpoint):")
     print(f"  Embedding dim: {hparams.multimodal_embedding_dim}")
-    print(f"  Target mean: {target_mean:.4f} (from config)")
-    print(f"  Target std: {target_std:.4f} (from config)")
-    print(f"  Log transform: {target_log_transform}")
+    if target_mean is not None and target_std is not None:
+        print(f"  Target mean: {target_mean:.4f} (from checkpoint - head uses this internally)")
+        print(f"  Target std: {target_std:.4f} (from checkpoint - head uses this internally)")
+        print(f"  Log transform: {target_log_transform}")
+    else:
+        print(f"  ⚠️  Could not extract target_mean/std from checkpoint (head should still work if loaded correctly)")
     
     # Load validation dataset
     print("\n" + "="*60)
@@ -423,15 +430,14 @@ def main():
         target_log_transform=True
     )
     
-    # Target normalization stats: only from config/checkpoint (never from pickle/metadata)
-    if (target_mean, target_std) != (0.0, 1.0):
-        print(f"\n✅ Using target normalization from config/checkpoint (log space):")
-        print(f"   Target mean: {target_mean:.4f}")
-        print(f"   Target std: {target_std:.4f}")
-    else:
-        print(f"\n⚠️  WARNING: target_mean and target_std are still defaults (0.0, 1.0)")
-        print(f"   This will cause incorrect denormalization!")
-        print(f"   Please set them in config file after running preprocessing.")
+    # NOTE: Target normalization is handled internally by the head
+    # The head's forward() method returns prediction_original which is already decoded to USD/m²
+    # No additional processing needed in evaluation pipeline
+    if target_mean is not None and target_std is not None:
+        print(f"\n✅ Head loaded with target normalization from checkpoint:")
+        print(f"   Target mean: {target_mean:.4f} (used internally by head for decoding)")
+        print(f"   Target std: {target_std:.4f} (used internally by head for decoding)")
+        print(f"   Predictions are already in original scale (USD/m²) - no additional decoding needed")
     
     val_loader = DataLoader(
         val_dataset,
@@ -453,10 +459,7 @@ def main():
         device=device,
         save_predictions=True,
         output_dir=val_eval_dir,
-        checkpoint_path=args.checkpoint,
-        target_mean=target_mean,
-        target_std=target_std,
-        target_log_transform=target_log_transform
+        checkpoint_path=args.checkpoint
     )
     
     # Load test dataset
@@ -497,10 +500,7 @@ def main():
         device=device,
         output_path=submission_path,
         checkpoint_path=args.checkpoint,
-        data_ids=None,  # Will extract from dataset
-        target_mean=target_mean,
-        target_std=target_std,
-        target_log_transform=target_log_transform
+        data_ids=None  # Will extract from dataset
     )
     
     print("\n" + "="*60)
