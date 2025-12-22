@@ -415,7 +415,10 @@ class ConstructionCostFinetuning(pl.LightningModule):
         # Regression head: always trainable
         regressor_params = list(self.model.regression.parameters())
         if regressor_params:
-            regressor_lr = self.hparams.lr_finetune * 10.0  # 10x for regression head
+            # Reduced multiplier for better convergence (5x instead of 10x)
+            # When training from scratch, lower LR is often better
+            regressor_lr_multiplier = getattr(self.hparams, 'regressor_lr_multiplier', 5.0)
+            regressor_lr = self.hparams.lr_finetune * regressor_lr_multiplier
             param_groups.append({
                 'params': regressor_params,
                 'lr': regressor_lr

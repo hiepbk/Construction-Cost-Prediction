@@ -327,6 +327,9 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     if hparams.use_wandb:
         callbacks.append(LearningRateMonitor(logging_interval='epoch'))
     
+    # Gradient clipping for stability (especially important when unfreezing backbone)
+    gradient_clip_val = getattr(hparams, 'gradient_clip_val', 1.0)  # Default: clip at 1.0
+    
     trainer = Trainer.from_argparse_args(
         hparams,
         accelerator="gpu",
@@ -339,7 +342,8 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
         limit_train_batches=hparams.limit_train_batches,
         limit_val_batches=hparams.limit_val_batches,
         limit_test_batches=hparams.limit_test_batches,
-        log_every_n_steps=getattr(hparams, 'log_every_n_steps', 1)
+        log_every_n_steps=getattr(hparams, 'log_every_n_steps', 1),
+        gradient_clip_val=gradient_clip_val  # Clip gradients for stability
     )
     
     print("\n" + "="*60)

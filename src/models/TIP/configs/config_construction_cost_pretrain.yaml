@@ -143,9 +143,32 @@ generate_embeddings: false  # Set to true to generate embeddings only
 algorithm_name: TIP
 online_mlp: true  # Enable online regression evaluation
 num_classes: 1  # For regression
-# Regression Head Configuration (all head-related parameters in one dict)
+# # Regression Head Configuration (all head-related parameters in one dict)
+# regression_head:
+#   type: RegressionMLP  # Head class name: RegressionMLP or MixtureOfExpertsRegression
+#   p: 0.2  # Dropout probability
+#   n_hidden: null  # Hidden dimension (null = use n_input, which is embedding_dim)
+#   # Loss configuration (dict with loss names and weights)
+#   # Only losses in this dict will contribute to the total weighted loss for backprop
+#   # All losses (rmsle, mae, rmse, mse, huber) are calculated internally for monitoring
+#   loss_type:
+#     rmsle: 1.0  # Primary metric (competition)
+#     # mae: 0.2    # Interpretable error
+#     # mse: 0.2    # Penalize large errors
+#     # rmse: 0.1   # Root mean squared error
+#   target_mean: 6.513477  # Mean of log(1 + target) values (computed from training dataset)
+#   target_std: 1.101045   # Std of log(1 + target) values (computed from training dataset)
+#   target_log_transform: true  # Whether targets are log-transformed (log1p)
+#   huber_delta: 1.0  # Delta parameter for Huber loss
+#   # For MixtureOfExpertsRegression, add:
+#   # num_experts: 8
+#   # top_k: 2
+#   # use_load_balancing: false
+#   # load_balancing_weight: 0.01
+
+
 regression_head:
-  type: RegressionMLP  # Head class name: RegressionMLP or MixtureOfExpertsRegression
+  type: MixtureOfExpertsRegression  # Head class: RegressionMLP or MixtureOfExpertsRegression
   p: 0.2  # Dropout probability
   n_hidden: null  # Hidden dimension (null = use n_input, which is embedding_dim)
   # Loss configuration (dict with loss names and weights)
@@ -156,15 +179,17 @@ regression_head:
     # mae: 0.2    # Interpretable error
     # mse: 0.2    # Penalize large errors
     # rmse: 0.1   # Root mean squared error
-  target_mean: 6.513477  # Mean of log(1 + target) values (computed from training dataset)
-  target_std: 1.101045   # Std of log(1 + target) values (computed from training dataset)
-  target_log_transform: true  # Whether targets are log-transformed (log1p)
+  target_mean: 6.513477  # From preprocessing (log space) - must match pretrain config
+  target_std: 1.101045   # From preprocessing (log space) - must match pretrain config
+  target_log_transform: true
   huber_delta: 1.0  # Delta parameter for Huber loss
-  # For MixtureOfExpertsRegression, add:
-  # num_experts: 8
-  # top_k: 2
-  # use_load_balancing: false
-  # load_balancing_weight: 0.01
+  # MoE-specific parameters:
+  num_experts: 4  # Number of expert networks (reduced from 8 for better convergence with small dataset)
+  top_k: 2  # Top-K routing: number of experts to use per sample
+  use_load_balancing: false  # Enable load balancing loss
+  load_balancing_weight: 0.01  # Weight for load balancing loss
+
+
 eval_metric: rmsle  # Metric to monitor for best checkpoint (rmsle, mae, rmse) - rmsle is primary
 limit_train_batches: null
 limit_val_batches: null

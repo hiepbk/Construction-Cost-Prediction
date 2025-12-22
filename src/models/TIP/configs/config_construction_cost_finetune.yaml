@@ -62,13 +62,24 @@ freeze_tabular: true  # Freeze tabular encoder (redundant if finetune_strategy=f
 missing_tabular: false
 # Note: Only the regression head (classifier) will be trained when finetune_strategy=frozen
 
+# Alternative: Unfreeze backbone for better convergence (commented out - can enable in future)
+# finetune_strategy: trainable  # Unfreeze backbone with lower LR for better convergence
+# freeze_image: true  # Keep image encoder frozen (already well-pretrained)
+# freeze_tabular: false  # Unfreeze tabular encoder (adapt to new head)
+# Note: When finetune_strategy='trainable':
+#   - Multimodal encoder: lr_finetune (5e-5)
+#   - Tabular encoder: lr_finetune (5e-5) if freeze_tabular=false
+#   - Image encoder: frozen (freeze_image=true)
+#   - Regression head: lr_finetune * 5 (2.5e-4)
+
 # Regression Head
 num_classes: 1
 # Regression Head Configuration (all head-related parameters in one dict)
 regression_head:
-  type: MixtureOfExpertsRegression  # Head class: RegressionMLP or MixtureOfExpertsRegression
+  type: AttentionAggregationRegression  # Head class: RegressionMLP or AttentionAggregationRegression
   p: 0.2  # Dropout probability
   n_hidden: null  # Hidden dimension (null = use n_input, which is embedding_dim)
+  num_heads: 8  # Number of attention heads (for AttentionAggregationRegression)
   # Loss configuration (dict with loss names and weights)
   # Only losses in this dict will contribute to the total weighted loss for backprop
   # All losses (rmsle, mae, rmse, mse, huber) are calculated internally for monitoring
@@ -81,29 +92,37 @@ regression_head:
   target_std: 1.101045   # From preprocessing (log space) - must match pretrain config
   target_log_transform: true
   huber_delta: 1.0  # Delta parameter for Huber loss
-  # MoE-specific parameters:
-  num_experts: 8  # Number of expert networks
-  top_k: 2  # Top-K routing: number of experts to use per sample
-  use_load_balancing: false  # Enable load balancing loss
-  load_balancing_weight: 0.01  # Weight for load balancing loss
+  # MoE-specific parameters (commented out - not used with AttentionAggregationRegression):
+  # num_experts: 4  # Number of expert networks (reduced from 8 for better convergence with small dataset)
+  # top_k: 2  # Top-K routing: number of experts to use per sample
+  # use_load_balancing: false  # Enable load balancing loss
+  # load_balancing_weight: 0.01  # Weight for load balancing loss
 
 # Training
 batch_size: 32
 lr: 3e-4  # Pretrain LR (not used in fine-tuning, but required by run.py)
 weight_decay: 1e-5  # Pretrain weight decay (not used in fine-tuning, but required by run.py)
-lr_finetune: 1e-4  # Fine-tuning learning rate (used for regression head)
+lr_finetune: 5e-5  # Fine-tuning learning rate (reduced from 1e-4 for better convergence)
 weight_decay_finetune: 1e-5  # Fine-tuning weight decay
+regressor_lr_multiplier: 5.0  # Multiplier for regression head LR (reduced from 10.0 to 5.0 for better convergence)
 max_epochs: 200
 log_every_n_steps: 1  # Log every step (since we have small number of batches ~13)
 
 # Scheduler (same as pretraining for consistency)
-scheduler: anneal  # Options: anneal (LinearWarmupCosineAnnealingLR), plateau (ReduceLROnPlateau)
-warmup_epochs: 10  # Warmup epochs for anneal scheduler (important for training from scratch)
-anneal_max_epochs: ${max_epochs}  # Max epochs for anneal scheduler (usually same as max_epochs)
-# For ReduceLROnPlateau (if scheduler='plateau'):
-# plateau_factor: 0.5  # Factor to reduce LR by
-# plateau_patience: 10  # Epochs to wait before reducing
-# plateau_min_lr: 1e-6  # Minimum LR
+# scheduler: anneal  # Options: anneal (LinearWarmupCosineAnnealingLR), plateau (ReduceLROnPlateau)
+# warmup_epochs: 20  # Warmup epochs (increased from 10 for better stability when training from scratch)
+# anneal_max_epochs: ${max_epochs}  # Max epochs for anneal scheduler (usually same as max_epochs)
+
+# Plateau scheduler
+scheduler: plateau
+plateau_factor: 0.5
+plateau_patience: 6        # Wait 6 epochs before reducing
+plateau_min_lr: 1e-6
+warmup_epochs: 30        # Warmup 30 epochs
+# Monitor: eval.val.rmsle (already configured)
+
+# Training stability
+gradient_clip_val: 1.0  # Gradient clipping value (clip gradients to prevent explosion)
 
 # TIP Loss Parameters (not used in fine-tuning, but required by run.py)
 corruption_rate: 0.0  # Not used during fine-tuning
