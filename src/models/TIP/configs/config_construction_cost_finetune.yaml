@@ -96,6 +96,15 @@ weight_decay_finetune: 1e-5  # Fine-tuning weight decay
 max_epochs: 200
 log_every_n_steps: 1  # Log every step (since we have small number of batches ~13)
 
+# Scheduler (same as pretraining for consistency)
+scheduler: anneal  # Options: anneal (LinearWarmupCosineAnnealingLR), plateau (ReduceLROnPlateau)
+warmup_epochs: 10  # Warmup epochs for anneal scheduler (important for training from scratch)
+anneal_max_epochs: ${max_epochs}  # Max epochs for anneal scheduler (usually same as max_epochs)
+# For ReduceLROnPlateau (if scheduler='plateau'):
+# plateau_factor: 0.5  # Factor to reduce LR by
+# plateau_patience: 10  # Epochs to wait before reducing
+# plateau_min_lr: 1e-6  # Minimum LR
+
 # TIP Loss Parameters (not used in fine-tuning, but required by run.py)
 corruption_rate: 0.0  # Not used during fine-tuning
 temperature: 0.1  # Not used during fine-tuning

@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torchmetrics
 import pytorch_lightning as pl
+from pl_bolts.optimizers.lr_scheduler import LinearWarmupCosineAnnealingLR
 
 from models.ConstructionCostPrediction import ConstructionCostPrediction
 
@@ -474,21 +475,42 @@ class ConstructionCostFinetuning(pl.LightningModule):
             weight_decay=getattr(self.hparams, 'weight_decay_finetune', 1e-5)
         )
         
-        # Scheduler
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode='min',
-            factor=0.5,
-            patience=10,
-            min_lr=1e-6
-        )
+        # Scheduler: Use same configurable scheduler as pretraining
+        scheduler_type = getattr(self.hparams, 'scheduler', 'anneal')  # Default to 'anneal'
+        
+        if scheduler_type == 'anneal':
+            # LinearWarmupCosineAnnealingLR: Best for training from scratch
+            warmup_epochs = getattr(self.hparams, 'warmup_epochs', 10)
+            max_epochs = getattr(self.hparams, 'max_epochs', 200)
+            scheduler = LinearWarmupCosineAnnealingLR(
+                optimizer,
+                warmup_epochs=warmup_epochs,
+                max_epochs=max_epochs
+            )
+            print(f"✅ Using LinearWarmupCosineAnnealingLR: warmup={warmup_epochs} epochs, max={max_epochs} epochs")
+        elif scheduler_type == 'plateau':
+            # ReduceLROnPlateau: Adaptive reduction (fallback option)
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode='min',
+                factor=getattr(self.hparams, 'plateau_factor', 0.5),
+                patience=getattr(self.hparams, 'plateau_patience', 10),
+                min_lr=getattr(self.hparams, 'plateau_min_lr', 1e-6)
+            )
+            print(f"✅ Using ReduceLROnPlateau: factor={getattr(self.hparams, 'plateau_factor', 0.5)}, patience={getattr(self.hparams, 'plateau_patience', 10)}")
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "monitor": 'eval.val.loss',
+                    "strict": False
+                }
+            }
+        else:
+            raise ValueError(f"Unknown scheduler type: {scheduler_type}. Supported: 'anneal', 'plateau'")
         
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": 'eval.val.loss',
-                "strict": False
-            }
+            "lr_scheduler": scheduler
         }
 
