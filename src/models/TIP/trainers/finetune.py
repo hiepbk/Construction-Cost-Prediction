@@ -389,24 +389,23 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     print(f"   Checkpoint saved to: {logdir}")
     print(f"   Best checkpoint: {join(logdir, f'checkpoint_best_{hparams.eval_metric}.ckpt')}")
     
-    # Cleanup: Release GPU memory and properly destroy DDP processes
-    # This prevents VRAM from staying occupied and semaphore leaks
+    # Professional cleanup: Use PyTorch's distributed cleanup mechanisms
+    # This properly handles DDP process destruction and resource cleanup
     import torch
-    import gc
+    import torch.distributed as dist
     
-    # Properly destroy trainer to clean up DDP processes
-    # Note: We delete after all operations that need trainer/model are done
-    del trainer
-    del model
-    del train_loader
-    del val_loader
+    try:
+        # Properly destroy DDP process group to prevent semaphore leaks
+        if dist.is_initialized():
+            dist.destroy_process_group()
+    except Exception as e:
+        # Log but don't fail on cleanup errors (cleanup should be best-effort)
+        print(f"⚠️  Warning during DDP cleanup: {e}")
     
-    # Force garbage collection
-    gc.collect()
-    
+    # Release GPU memory (PyTorch Lightning doesn't always do this automatically)
     if torch.cuda.is_available():
-        torch.cuda.empty_cache()  # Final cleanup
-        torch.cuda.synchronize()  # Wait for all GPU operations to complete
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
     
-    return None, logdir  # Return None for model since it's deleted (checkpoint already saved)
+    return model, logdir
 

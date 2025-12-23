@@ -363,28 +363,22 @@ def _pretrain_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
                                        limit_train_batches=hparams.limit_train_batches, limit_val_batches=hparams.limit_val_batches, enable_progress_bar=hparams.enable_progress_bar,
                                        log_every_n_steps=getattr(hparams, 'log_every_n_steps', 1))
 
-  if hparams.resume_training:
-    trainer.fit(model, train_loader, val_loader, ckpt_path=hparams.checkpoint)
-  else:
-    trainer.fit(model, train_loader, val_loader)
-  
-  # Cleanup: Release GPU memory and properly destroy DDP processes
-  # This prevents VRAM from staying occupied and semaphore leaks
-  import torch
-  if torch.cuda.is_available():
-    torch.cuda.empty_cache()  # Clear GPU cache
-    torch.cuda.synchronize()  # Wait for all GPU operations to complete
-  
-  # Properly destroy trainer to clean up DDP processes
-  # This helps prevent semaphore leaks
-  del trainer
-  del model
-  del train_loader
-  del val_loader
-  
-  # Force garbage collection
-  import gc
-  gc.collect()
-  
-  if torch.cuda.is_available():
-    torch.cuda.empty_cache()  # Final cleanup
+  try:
+    if hparams.resume_training:
+      trainer.fit(model, train_loader, val_loader, ckpt_path=hparams.checkpoint)
+    else:
+      trainer.fit(model, train_loader, val_loader)
+  finally:
+    # Professional cleanup: Use PyTorch Lightning's built-in cleanup mechanisms
+    # This properly handles DDP process destruction and resource cleanup
+    import torch
+    import torch.distributed as dist
+    
+    # Properly destroy DDP process group to prevent semaphore leaks
+    if dist.is_initialized():
+      dist.destroy_process_group()
+    
+    # Release GPU memory (PyTorch Lightning doesn't always do this automatically)
+    if torch.cuda.is_available():
+      torch.cuda.empty_cache()
+      torch.cuda.synchronize()
