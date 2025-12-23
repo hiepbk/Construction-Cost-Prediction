@@ -401,10 +401,10 @@ python run.py \
 ```bash
 conda activate ccp
 cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
+
 python -u run.py \
     --config-name=config_construction_cost_finetune \
-    finetune=True \
-    checkpoint=/hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/pretrain/tip_pretrain_construction_cost_1221_2023/checkpoint_last_epoch_99.ckpt
+    finetune=True 
 ```
 
 **Note:** The checkpoint path must be an **absolute path** or relative to the project root. Since the script runs from `src/models/TIP`, use absolute paths like `/hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/...`

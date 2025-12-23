@@ -1028,7 +1028,8 @@ class AttentionAggregationRegression(nn.Module):
         )
         
         # Initialize weights properly
-        self._initialize_weights()
+        # when disable init, the pretrain performance is better
+        # self._initialize_weights()
         
         # Initialize loss functions for ALL possible losses (for monitoring)
         # We calculate all losses, but only weight those in loss_config
