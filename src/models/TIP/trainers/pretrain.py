@@ -367,3 +367,24 @@ def _pretrain_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     trainer.fit(model, train_loader, val_loader, ckpt_path=hparams.checkpoint)
   else:
     trainer.fit(model, train_loader, val_loader)
+  
+  # Cleanup: Release GPU memory and properly destroy DDP processes
+  # This prevents VRAM from staying occupied and semaphore leaks
+  import torch
+  if torch.cuda.is_available():
+    torch.cuda.empty_cache()  # Clear GPU cache
+    torch.cuda.synchronize()  # Wait for all GPU operations to complete
+  
+  # Properly destroy trainer to clean up DDP processes
+  # This helps prevent semaphore leaks
+  del trainer
+  del model
+  del train_loader
+  del val_loader
+  
+  # Force garbage collection
+  import gc
+  gc.collect()
+  
+  if torch.cuda.is_available():
+    torch.cuda.empty_cache()  # Final cleanup

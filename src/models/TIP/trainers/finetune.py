@@ -389,5 +389,24 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     print(f"   Checkpoint saved to: {logdir}")
     print(f"   Best checkpoint: {join(logdir, f'checkpoint_best_{hparams.eval_metric}.ckpt')}")
     
-    return model, logdir
+    # Cleanup: Release GPU memory and properly destroy DDP processes
+    # This prevents VRAM from staying occupied and semaphore leaks
+    import torch
+    import gc
+    
+    # Properly destroy trainer to clean up DDP processes
+    # Note: We delete after all operations that need trainer/model are done
+    del trainer
+    del model
+    del train_loader
+    del val_loader
+    
+    # Force garbage collection
+    gc.collect()
+    
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()  # Final cleanup
+        torch.cuda.synchronize()  # Wait for all GPU operations to complete
+    
+    return None, logdir  # Return None for model since it's deleted (checkpoint already saved)
 
