@@ -65,82 +65,35 @@ class ConstructionCostFinetuning(pl.LightningModule):
         self.tracked_val_preds = {}  # Dict: {data_id: prediction_value}
         self.tracked_val_targets = {}  # Dict: {data_id: target_value}
         
-        # Target normalization parameters (for denormalization)
-        self.target_mean = getattr(hparams, 'target_mean', 0.0)
-        self.target_std = getattr(hparams, 'target_std', 1.0)
-        self.target_log_transform = getattr(hparams, 'target_log_transform', True)
+        # Target normalization parameters are stored in the head, not here
+        # Get them from head for logging purposes only
+        if hasattr(self.model.regression, 'target_mean'):
+            target_mean = self.model.regression.target_mean
+            target_std = self.model.regression.target_std
+            target_log_transform = self.model.regression.target_log_transform
+        else:
+            target_mean = None
+            target_std = None
+            target_log_transform = None
         
         self.best_val_mae = float('inf')
         self.best_val_rmse = float('inf')
         self.best_val_rmsle = float('inf')
         self.best_val_score = float('inf')  # For compatibility with evaluate.py (will be set based on eval_metric)
         
-        # Get loss config for printing
-        loss_config = getattr(hparams, 'regression_loss', {'rmsle': 1.0})
+        # Get loss config for printing (from head)
+        loss_config = getattr(self.model.regression, 'loss_config', {'rmsle': 1.0})
         
         print(f"Initialized ConstructionCostFinetuning")
         print(f"  Loss config: {loss_config}")
-        print(f"  Target log-transform: {self.target_log_transform}")
-        print(f"  Target normalization: mean={self.target_mean:.2f}, std={self.target_std:.2f}")
-    
-    def denormalize_target(self, y: torch.Tensor) -> torch.Tensor:
-        """
-        Denormalize target from log space to original space.
-        
-        Args:
-            y: Normalized target (in log space if log_transform=True)
-        
-        Returns:
-            Original target values (USD/m²)
-        """
-        # Denormalize: y_orig = y_norm * std + mean
-        y_denorm = y * self.target_std + self.target_mean
-        
-        # Reverse log-transform: exp(y) - 1
-        if self.target_log_transform:
-            y_denorm = torch.expm1(y_denorm)  # exp(y) - 1
-        
-        return y_denorm
-    
-    def _rmsle_loss(self, y_pred: torch.Tensor, y_true_original: torch.Tensor) -> torch.Tensor:
-        """
-        RMSLE Loss: sqrt(mean((log1p(y_true_orig) - log1p(y_pred_orig))^2))
-        
-        This directly optimizes the competition metric (RMSLE).
-        
-        IMPORTANT: 
-        - y_pred: Predicted values in normalized log space → convert to original scale
-        - y_true_original: Ground truth in ORIGINAL scale (USD/m²) - use directly, don't convert
-        
-        Args:
-            y_pred: Predicted values (in log-normalized space)
-            y_true_original: True values in ORIGINAL scale (USD/m²) - not normalized, not log-transformed
-        
-        Returns:
-            RMSLE loss (scalar tensor)
-        """
-        # Convert y_pred from normalized log space to original scale
-        # Step 1: Denormalize (reverse normalization)
-        y_pred_log = y_pred * self.target_std + self.target_mean
-        
-        # Step 2: Reverse log-transform to get original scale
-        if self.target_log_transform:
-            y_pred_original = torch.expm1(y_pred_log)  # exp(x) - 1
+        if target_mean is not None:
+            print(f"  Target log-transform: {target_log_transform}")
+            print(f"  Target normalization: mean={target_mean:.2f}, std={target_std:.2f} (from head)")
         else:
-            y_pred_original = y_pred_log
-        
-        # Ensure non-negative
-        y_pred_original = torch.clamp(y_pred_original, min=0.0)
-        y_true_original = torch.clamp(y_true_original, min=0.0)
-        
-        # Compute RMSLE: sqrt(mean((log1p(y_true_orig) - log1p(y_pred_orig))^2))
-        log_pred = torch.log1p(y_pred_original)  # log(1 + y_pred)
-        log_true = torch.log1p(y_true_original)  # log(1 + y_true) - using original GT directly
-        
-        squared_log_error = (log_true - log_pred) ** 2
-        rmsle = torch.sqrt(torch.mean(squared_log_error))
-        
-        return rmsle
+            print(f"  ⚠️  Could not get target normalization from head")
+    
+    # Removed denormalize_target() and _rmsle_loss() methods
+    # The head already handles all target normalization/denormalization and loss calculation internally
     
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
@@ -195,15 +148,13 @@ class ConstructionCostFinetuning(pl.LightningModule):
         loss = head_result['loss']  # scalar - total weighted loss (for backprop)
         loss_dict = head_result['loss_dict']  # dict with all individual losses
         
-        # Get ground truth in original scale for metrics
+        # Get ground truth in original scale (already provided by dataloader)
+        # No need to denormalize - head handles everything internally
         if y_original is not None:
             y_true_original = y_original.squeeze()
         else:
-            # Fallback: convert from log space
-            y_true_original = self.denormalize_target(y.detach().squeeze())
-        
-        # Ensure non-negative
-        y_true_original = torch.clamp(y_true_original, min=0.0)
+            # Fallback: y_original should always be provided by ConstructionCostTIPDataset
+            y_true_original = None
         
         # Log losses from head (already calculated internally) - no need for manual metric calculation
         batch_size = y_hat_original.shape[0] if len(y_hat_original.shape) > 0 else 1
