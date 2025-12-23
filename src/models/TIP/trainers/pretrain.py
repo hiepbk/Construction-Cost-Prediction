@@ -1,3 +1,5 @@
+import torch
+import torch.distributed as dist
 from torch import cuda
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
@@ -371,9 +373,6 @@ def _pretrain_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
   finally:
     # Professional cleanup: Use PyTorch Lightning's built-in cleanup mechanisms
     # This properly handles DDP process destruction and resource cleanup
-    import torch
-    import torch.distributed as dist
-    
     # Properly destroy DDP process group to prevent semaphore leaks
     if dist.is_initialized():
       dist.destroy_process_group()

@@ -21,12 +21,12 @@ from datetime import datetime
 import torchmetrics
 
 # Add src/models/TIP to path for relative imports (like other TIP scripts)
-tip_root = os.path.abspath(os.path.dirname(__file__))
+tip_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if tip_root not in sys.path:
     sys.path.insert(0, tip_root)
 
 # Add project root to path (for accessing src.data.augmentations if needed)
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 

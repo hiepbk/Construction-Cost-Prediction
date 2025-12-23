@@ -108,7 +108,7 @@ Evaluate a fine-tuned model on validation/test sets:
 
 ```sh
 cd src/models/TIP
-python evaluate_construction_cost.py \
+python trainers/evaluate_construction_cost.py \
   --checkpoint {PATH_TO_FINETUNE_CHECKPOINT} \
   --val_csv {PATH_TO_VAL_CSV} \
   --test_csv {PATH_TO_TEST_CSV} \

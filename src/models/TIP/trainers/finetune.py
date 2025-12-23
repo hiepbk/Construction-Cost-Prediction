@@ -11,12 +11,13 @@ import os
 from os.path import join
 from omegaconf import open_dict, OmegaConf
 import torch
+import torch.distributed as dist
 from torch.utils.data import DataLoader
+from torch.utils.data.sampler import WeightedRandomSampler
+from torch import cuda
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
-from torch.utils.data.sampler import WeightedRandomSampler
-from torch import cuda
 import pandas as pd
 import numpy as np
 
@@ -391,9 +392,6 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     
     # Professional cleanup: Use PyTorch's distributed cleanup mechanisms
     # This properly handles DDP process destruction and resource cleanup
-    import torch
-    import torch.distributed as dist
-    
     try:
         # Properly destroy DDP process group to prevent semaphore leaks
         if dist.is_initialized():

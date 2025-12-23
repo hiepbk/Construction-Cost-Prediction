@@ -450,7 +450,7 @@ cd /hdd/hiep/CODE/Construction_Cost_Prediction
 **Or run directly:**
 ```bash
 cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
-python evaluate_construction_cost.py \
+python trainers/evaluate_construction_cost.py \
     --checkpoint work_dir/runs/pretrain/tip_pretrain_*/checkpoint_best_rmsle_*.ckpt \
     --val_csv /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean.csv \
     --test_csv /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/test/test_clean.csv \

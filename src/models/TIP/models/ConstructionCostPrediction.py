@@ -10,7 +10,7 @@ It wraps TIPBackbone and handles:
 
 Used by:
 - Fine-tuning process (finetune.py)
-- Evaluation script (evaluate_construction_cost.py)
+- Evaluation script (trainers/evaluate_construction_cost.py)
 """
 import torch
 import torch.nn as nn
@@ -58,7 +58,7 @@ class ConstructionCostPrediction(nn.Module):
             checkpoint_hparams = OmegaConf.create(checkpoint['hyper_parameters'])
             
             # Merge architecture params from checkpoint into hparams (if missing)
-            # This is needed when loading checkpoint directly (e.g., in evaluate_construction_cost.py)
+            # This is needed when loading checkpoint directly (e.g., in trainers/evaluate_construction_cost.py)
             # In finetune.py, this merge is already done, so this is a no-op in that case
             with open_dict(hparams):
                 checkpoint_dict = OmegaConf.to_container(checkpoint_hparams, resolve=True)
