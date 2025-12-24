@@ -200,6 +200,7 @@ def pretrain(hparams, wandb_logger):
       print("="*60)
       
       # Create base logdir once for all folds (allow existing for subsequent folds)
+      # create_logdir will strip tip_pretrain_ prefix from wandb name
       base_logdir = create_logdir('pretrain', hparams.resume_training, wandb_logger, allow_existing=False)
       
       for fold_idx in range(k_fold):
@@ -255,7 +256,8 @@ def _pretrain_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
   print(f"Number of validation batches: {len(val_loader)}")
   print(f'Valid batch size: {hparams.batch_size*cuda.device_count()}')
 
-  # Create logdir based on WandB run name
+  # Derive logdir run name using head type + timestamp from existing wandb name (do not change wandb name)
+  # Create logdir (create_logdir will strip tip_pretrain_ prefix from wandb name)
   # Add fold information to logdir if using k-fold
   if base_logdir is None:
     base_logdir = create_logdir('pretrain', hparams.resume_training, wandb_logger)

@@ -10,7 +10,7 @@ import torch
 from torchvision import transforms
 import numpy as np
 
-def create_logdir(name: str, resume_training: bool, wandb_logger, allow_existing: bool = False):
+def create_logdir(name: str, resume_training: bool, wandb_logger, allow_existing: bool = False, run_name_override: str = None):
   # Get project root: go up 3 levels from src/models/TIP/ to project root
   basepath = os.path.dirname(os.path.abspath(sys.argv[0]))
   # src/models/TIP/ -> src/models/ -> src/ -> project root
@@ -18,11 +18,26 @@ def create_logdir(name: str, resume_training: bool, wandb_logger, allow_existing
   basepath = os.path.join(basepath, 'work_dir')
   basepath = join(basepath, 'runs', name)
   # basepath = join(os.path.dirname(os.path.abspath(sys.argv[0])),'runs', name)
-  run_name = wandb_logger.experiment.name
-  logdir = join(basepath,run_name)
+  
+  # For runs folder: strip tip_pretrain_ or tip_finetune_ prefix from WandB name
+  # WandB name format: tip_pretrain_QueryAttentionRegression_1221_0245
+  # Folder name format: QueryAttentionRegression_1221_0245
+  if run_name_override is not None:
+    run_name = run_name_override
+  else:
+    wandb_name = wandb_logger.experiment.name
+    # Strip tip_pretrain_ or tip_finetune_ prefix
+    if wandb_name.startswith('tip_pretrain_'):
+      run_name = wandb_name[len('tip_pretrain_'):]
+    elif wandb_name.startswith('tip_finetune_'):
+      run_name = wandb_name[len('tip_finetune_'):]
+    else:
+      run_name = wandb_name
+  
+  logdir = join(basepath, run_name)
   if os.path.exists(logdir) and not resume_training and not allow_existing:
     raise Exception(f'Run {run_name} already exists. Please delete the folder {logdir} or choose a different run name.')
-  os.makedirs(logdir,exist_ok=True)
+  os.makedirs(logdir, exist_ok=True)
   return logdir
 
 

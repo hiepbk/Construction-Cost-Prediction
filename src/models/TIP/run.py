@@ -62,7 +62,9 @@ def run(args: DictConfig):
   base_dir = os.path.dirname(os.path.dirname(os.path.dirname(base_dir)))
   base_dir = os.path.join(base_dir, 'work_dir')
   
-  exp_name = f'{args.exp_name}_{args.target}_{now.strftime("%m%d_%H%M")}'
+  # exp_name from config can already include head name via interpolation: tip_pretrain_${regression_head.type}
+  # Add timestamp for WandB experiment name
+  exp_name = f'{args.exp_name}_{now.strftime("%m%d_%H%M")}'
   if args.use_wandb:
     if args.resume_training and args.wandb_id:
       wandb_logger = WandbLogger(name=exp_name, project=args.wandb_project, entity=args.wandb_entity, save_dir=base_dir, offline=args.offline, id=args.wandb_id, resume='allow')

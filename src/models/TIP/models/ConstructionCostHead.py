@@ -1285,12 +1285,237 @@ class AttentionAggregationRegression(nn.Module):
         return loss_dict
 
 
+class QueryAttentionRegression(RegressionMLP):
+    """
+    Learnable query attention pooling head.
+    Uses one (or a few) learnable queries to attend over token sequence, then MLP to scalar.
+    
+    Config keys to add when using this head:
+      type: QueryAttentionRegression
+      num_queries: int (default 1)
+      num_heads: int (default 8)
+    """
+    def __init__(
+        self,
+        n_input: int,
+        loss_type: Dict[str, float],
+        n_hidden: Optional[int] = None,
+        p: float = 0.2,
+        target_mean: float = 0.0,
+        target_std: float = 1.0,
+        target_log_transform: bool = True,
+        huber_delta: float = 1.0,
+        num_queries: int = 1,
+        num_heads: int = 8,
+    ):
+        super().__init__(
+            n_input=n_input,
+            loss_type=loss_type,
+            n_hidden=n_hidden,
+            p=p,
+            target_mean=target_mean,
+            target_std=target_std,
+            target_log_transform=target_log_transform,
+            huber_delta=huber_delta,
+        )
+        self.num_queries = num_queries
+        self.attention = nn.MultiheadAttention(
+            embed_dim=n_input,
+            num_heads=num_heads,
+            dropout=p,
+            batch_first=True,
+        )
+        # Learnable queries (num_queries, n_input)
+        self.query = nn.Parameter(torch.randn(num_queries, n_input))
+        self.attn_norm = nn.LayerNorm(n_input)
+
+    def forward(
+        self,
+        x: Tensor,
+        target: Optional[Tensor] = None,
+        target_original: Optional[Tensor] = None,
+    ) -> Dict[str, Tensor]:
+        if x.dim() != 3:
+            raise ValueError(f"Expected x to be 3D (B, N, n_input), got shape {x.shape}")
+        B = x.shape[0]
+        # Expand learnable queries for batch: (B, num_queries, n_input)
+        queries = self.query.unsqueeze(0).expand(B, -1, -1)
+        attn_out, _ = self.attention(queries, x, x)  # (B, num_queries, n_input)
+        attn_out = self.attn_norm(attn_out)
+        # Aggregate queries (mean if multiple)
+        if attn_out.shape[1] == 1:
+            agg = attn_out.squeeze(1)
+        else:
+            agg = attn_out.mean(dim=1)
+        prediction_log = self.mlp(agg).squeeze(-1)
+        prediction_original = self.construction_cost_decode(prediction_log)
+        result = {
+            'prediction_log': prediction_log,
+            'prediction_original': prediction_original,
+        }
+        if target is not None or target_original is not None:
+            loss_dict = self.calculate_loss(
+                prediction_log=prediction_log,
+                prediction_original=prediction_original,
+                target=target,
+                target_original=target_original,
+            )
+            result['loss'] = loss_dict['total']
+            result['loss_dict'] = loss_dict
+        return result
+
+
+class GatedAttentionPoolingRegression(RegressionMLP):
+    """
+    Gated attention pooling head (MIL-style).
+    Learns token importance via a small gating MLP, aggregates tokens with soft weights, then MLP to scalar.
+    
+    Config keys to add when using this head:
+      type: GatedAttentionPoolingRegression
+      gate_hidden: int (default n_input // 2)
+    """
+    def __init__(
+        self,
+        n_input: int,
+        loss_type: Dict[str, float],
+        n_hidden: Optional[int] = None,
+        p: float = 0.2,
+        target_mean: float = 0.0,
+        target_std: float = 1.0,
+        target_log_transform: bool = True,
+        huber_delta: float = 1.0,
+        gate_hidden: Optional[int] = None,
+    ):
+        super().__init__(
+            n_input=n_input,
+            loss_type=loss_type,
+            n_hidden=n_hidden,
+            p=p,
+            target_mean=target_mean,
+            target_std=target_std,
+            target_log_transform=target_log_transform,
+            huber_delta=huber_delta,
+        )
+        gate_hidden = gate_hidden if gate_hidden is not None else n_input // 2
+        self.pre_ln = nn.LayerNorm(n_input)
+        self.gate = nn.Sequential(
+            nn.Linear(n_input, gate_hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(gate_hidden, 1),
+        )
+
+    def forward(
+        self,
+        x: Tensor,
+        target: Optional[Tensor] = None,
+        target_original: Optional[Tensor] = None,
+    ) -> Dict[str, Tensor]:
+        if x.dim() != 3:
+            raise ValueError(f"Expected x to be 3D (B, N, n_input), got shape {x.shape}")
+        x_ln = self.pre_ln(x)
+        gate_logits = self.gate(x_ln).squeeze(-1)  # (B, N)
+        attn_weights = torch.softmax(gate_logits, dim=1).unsqueeze(-1)  # (B, N, 1)
+        agg = torch.sum(attn_weights * x_ln, dim=1)  # (B, n_input)
+        prediction_log = self.mlp(agg).squeeze(-1)
+        prediction_original = self.construction_cost_decode(prediction_log)
+        result = {
+            'prediction_log': prediction_log,
+            'prediction_original': prediction_original,
+        }
+        if target is not None or target_original is not None:
+            loss_dict = self.calculate_loss(
+                prediction_log=prediction_log,
+                prediction_original=prediction_original,
+                target=target,
+                target_original=target_original,
+            )
+            result['loss'] = loss_dict['total']
+            result['loss_dict'] = loss_dict
+        return result
+
+
+class DualPoolRegression(RegressionMLP):
+    """
+    Dual pooling head (mean + max) with MLP.
+    Concatenates mean and max pooled tokens, then MLP to scalar.
+    
+    Config keys to add when using this head:
+      type: DualPoolRegression
+    """
+    def __init__(
+        self,
+        n_input: int,
+        loss_type: Dict[str, float],
+        n_hidden: Optional[int] = None,
+        p: float = 0.2,
+        target_mean: float = 0.0,
+        target_std: float = 1.0,
+        target_log_transform: bool = True,
+        huber_delta: float = 1.0,
+    ):
+        # Store chosen hidden dim for overriding MLP
+        chosen_hidden = n_hidden if n_hidden is not None else 2048
+        super().__init__(
+            n_input=n_input,
+            loss_type=loss_type,
+            n_hidden=chosen_hidden,
+            p=p,
+            target_mean=target_mean,
+            target_std=target_std,
+            target_log_transform=target_log_transform,
+            huber_delta=huber_delta,
+        )
+        # Override MLP to accept concatenated mean+max (2 * n_input)
+        self.mlp = nn.Sequential(
+            nn.Linear(2 * n_input, chosen_hidden),
+            nn.BatchNorm1d(chosen_hidden),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p),
+            nn.Linear(chosen_hidden, chosen_hidden // 2),
+            nn.BatchNorm1d(chosen_hidden // 2),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p),
+            nn.Linear(chosen_hidden // 2, 1),
+        )
+
+    def forward(
+        self,
+        x: Tensor,
+        target: Optional[Tensor] = None,
+        target_original: Optional[Tensor] = None,
+    ) -> Dict[str, Tensor]:
+        if x.dim() != 3:
+            raise ValueError(f"Expected x to be 3D (B, N, n_input), got shape {x.shape}")
+        mean_pool = x.mean(dim=1)
+        max_pool, _ = x.max(dim=1)
+        agg = torch.cat([mean_pool, max_pool], dim=-1)  # (B, 2*n_input)
+        prediction_log = self.mlp(agg).squeeze(-1)
+        prediction_original = self.construction_cost_decode(prediction_log)
+        result = {
+            'prediction_log': prediction_log,
+            'prediction_original': prediction_original,
+        }
+        if target is not None or target_original is not None:
+            loss_dict = self.calculate_loss(
+                prediction_log=prediction_log,
+                prediction_original=prediction_original,
+                target=target,
+                target_original=target_original,
+            )
+            result['loss'] = loss_dict['total']
+            result['loss_dict'] = loss_dict
+        return result
+
+
 # Registry of available head classes
 HEAD_REGISTRY = {
     'RegressionMLP': RegressionMLP,
     'RegressionMLP2': RegressionMLPTest,
     'MixtureOfExpertsRegression': MixtureOfExpertsRegression,
     'AttentionAggregationRegression': AttentionAggregationRegression,
+    'QueryAttentionRegression': QueryAttentionRegression,
+    'GatedAttentionPoolingRegression': GatedAttentionPoolingRegression,
+    'DualPoolRegression': DualPoolRegression,
     # Add more head classes here in the future
     # 'RegressionTransformer': RegressionTransformer,
     # 'RegressionResNet': RegressionResNet,
