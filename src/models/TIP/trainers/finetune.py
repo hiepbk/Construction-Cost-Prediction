@@ -8,7 +8,10 @@ This script:
 4. Saves checkpoint with all necessary hyperparameters (architecture from pretrain + fine-tuning config)
 """
 import os
+import glob
+import re
 from os.path import join
+from types import SimpleNamespace
 from omegaconf import open_dict, OmegaConf
 import torch
 import torch.distributed as dist
@@ -24,6 +27,85 @@ import numpy as np
 from datasets.ConstructionCostTIPDataset import ConstructionCostTIPDataset
 from models.ConstructionCostFinetuning import ConstructionCostFinetuning
 from utils.utils import grab_arg_from_checkpoint, create_logdir
+from trainers.evaluate_construction_cost import run_evaluation
+
+
+def _run_evaluation_for_fold(logdir, hparams, evaluator_config):
+    """
+    Run evaluation for a single fold (or fixed split if fold_index is None).
+    
+    Args:
+        logdir: Directory containing the checkpoint files
+        hparams: Hyperparameters (for eval_metric)
+        evaluator_config: Evaluator configuration from hparams
+    
+    Returns:
+        bool: True if evaluation succeeded, False otherwise
+    """
+    checkpoint_type = getattr(evaluator_config, 'checkpoint_type', 'best')
+    checkpoint_path = None
+    
+    if checkpoint_type == 'best':
+        # Find best checkpoint (format: checkpoint_best_{metric}_{epoch}_{value}.ckpt)
+        best_pattern = join(logdir, f'checkpoint_best_{hparams.eval_metric}_*.ckpt')
+        best_files = glob.glob(best_pattern)
+        if best_files:
+            # Sort by epoch number in filename (highest epoch = most recent)
+            def get_epoch(filename):
+                match = re.search(rf'checkpoint_best_{hparams.eval_metric}_(\d+)_', filename)
+                return int(match.group(1)) if match else 0
+            checkpoint_path = sorted(best_files, key=get_epoch, reverse=True)[0]
+        else:
+            print(f"⚠️  No best checkpoint found matching pattern: {best_pattern}")
+            print(f"   Falling back to last checkpoint")
+            checkpoint_type = 'last'
+    
+    if checkpoint_path is None or checkpoint_type == 'last':
+        # Find last checkpoint (format: checkpoint_last_epoch_{epoch}.ckpt)
+        last_pattern = join(logdir, 'checkpoint_last_epoch_*.ckpt')
+        last_files = glob.glob(last_pattern)
+        if last_files:
+            # Sort by epoch number in filename
+            def get_epoch(filename):
+                match = re.search(r'checkpoint_last_epoch_(\d+)\.ckpt', filename)
+                return int(match.group(1)) if match else 0
+            checkpoint_path = sorted(last_files, key=get_epoch, reverse=True)[0]
+        else:
+            print(f"⚠️  No checkpoint found in {logdir}")
+            return False
+    
+    if not checkpoint_path or not os.path.exists(checkpoint_path):
+        print(f"⚠️  Checkpoint not found: {checkpoint_path}")
+        return False
+    
+    print(f"Using checkpoint: {checkpoint_path}")
+    print(f"Checkpoint type: {checkpoint_type}")
+    
+    # Create args object for evaluation
+    eval_args = SimpleNamespace(
+        checkpoint=checkpoint_path,
+        val_csv=getattr(evaluator_config, 'val_csv'),
+        test_csv=getattr(evaluator_config, 'test_csv'),
+        composite_dir_trainval=getattr(evaluator_config, 'composite_dir_trainval'),
+        composite_dir_test=getattr(evaluator_config, 'composite_dir_test'),
+        field_lengths=getattr(evaluator_config, 'field_lengths'),
+        val_metadata=getattr(evaluator_config, 'val_metadata'),
+        test_metadata=getattr(evaluator_config, 'test_metadata'),
+        batch_size=getattr(evaluator_config, 'batch_size', 32),
+        num_workers=getattr(evaluator_config, 'num_workers', 2),
+        device=getattr(evaluator_config, 'device', 'cuda'),
+        freeze_backbone=True,
+        output_dir=None  # Will be set to checkpoint_dir/evaluation/
+    )
+    
+    try:
+        run_evaluation(eval_args)
+        return True
+    except Exception as e:
+        print(f"⚠️  Error during evaluation: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 
 def load_datasets(hparams, fold_index=None):
@@ -406,6 +488,19 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
+    
+    # Run automatic evaluation if enabled
+    evaluator_config = getattr(hparams, 'evaluator', None)
+    if evaluator_config and getattr(evaluator_config, 'enabled', False):
+        print("\n" + "="*60)
+        print("RUNNING AUTOMATIC EVALUATION")
+        print("="*60)
+        
+        success = _run_evaluation_for_fold(logdir, hparams, evaluator_config)
+        if success:
+            print("\n✅ Automatic evaluation complete!")
+        else:
+            print("\n⚠️  Automatic evaluation failed or skipped")
     
     return model, logdir
 

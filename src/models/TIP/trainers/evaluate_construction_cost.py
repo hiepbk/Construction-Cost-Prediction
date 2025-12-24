@@ -299,36 +299,12 @@ def run_inference(
     print(f"   Prediction std: {all_predictions.std():.2f} USD/m²")
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Evaluate TIP model for construction cost prediction')
-    parser.add_argument('--checkpoint', type=str, required=True,
-                        help='Path to pretrained checkpoint (.ckpt file)')
-    parser.add_argument('--val_csv', type=str, required=True,
-                        help='Path to validation CSV (with targets)')
-    parser.add_argument('--test_csv', type=str, required=True,
-                        help='Path to test CSV (without targets)')
-    parser.add_argument('--composite_dir_trainval', type=str, required=True,
-                        help='Directory containing satellite TIFF files for train/val sets')
-    parser.add_argument('--composite_dir_test', type=str, required=True,
-                        help='Directory containing satellite TIFF files for test set')
-    parser.add_argument('--field_lengths', type=str, required=True,
-                        help='Path to field_lengths.pt file')
-    parser.add_argument('--val_metadata', type=str, required=True,
-                        help='Path to validation metadata.pkl file')
-    parser.add_argument('--test_metadata', type=str, required=True,
-                        help='Path to test metadata.pkl file')
-    parser.add_argument('--output_dir', type=str, default=None,
-                        help='Output directory for results (if None, will use checkpoint directory/evaluation/)')
-    parser.add_argument('--batch_size', type=int, default=32,
-                        help='Batch size for evaluation')
-    parser.add_argument('--num_workers', type=int, default=4,
-                        help='Number of data loader workers')
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-                        help='Device to use (cuda/cpu)')
-    parser.add_argument('--freeze_backbone', action='store_true', default=True,
-                        help='Freeze backbone during evaluation')
+def run_evaluation(args):
+    """
+    Run evaluation programmatically (can be called from other scripts).
     
-    args = parser.parse_args()
+    Args can be either argparse.Namespace or a dict-like object with the required attributes.
+    """
     
     # Always use checkpoint directory for evaluation (ignore --output_dir if provided)
     # Extract checkpoint directory and create evaluation folder structure
@@ -510,6 +486,39 @@ def main():
     print(f"  - Validation metrics: RMSLE={metrics.get('rmsle', 'N/A'):.6f}")
     print(f"  - Validation predictions: {val_eval_dir}")
     print(f"  - Test submission: {submission_path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Evaluate TIP model for construction cost prediction')
+    parser.add_argument('--checkpoint', type=str, required=True,
+                        help='Path to pretrained checkpoint (.ckpt file)')
+    parser.add_argument('--val_csv', type=str, required=True,
+                        help='Path to validation CSV (with targets)')
+    parser.add_argument('--test_csv', type=str, required=True,
+                        help='Path to test CSV (without targets)')
+    parser.add_argument('--composite_dir_trainval', type=str, required=True,
+                        help='Directory containing satellite TIFF files for train/val sets')
+    parser.add_argument('--composite_dir_test', type=str, required=True,
+                        help='Directory containing satellite TIFF files for test set')
+    parser.add_argument('--field_lengths', type=str, required=True,
+                        help='Path to field_lengths.pt file')
+    parser.add_argument('--val_metadata', type=str, required=True,
+                        help='Path to validation metadata.pkl file')
+    parser.add_argument('--test_metadata', type=str, required=True,
+                        help='Path to test metadata.pkl file')
+    parser.add_argument('--output_dir', type=str, default=None,
+                        help='Output directory for results (if None, will use checkpoint directory/evaluation/)')
+    parser.add_argument('--batch_size', type=int, default=32,
+                        help='Batch size for evaluation')
+    parser.add_argument('--num_workers', type=int, default=4,
+                        help='Number of data loader workers')
+    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
+                        help='Device to use (cuda/cpu)')
+    parser.add_argument('--freeze_backbone', action='store_true', default=True,
+                        help='Freeze backbone during evaluation')
+    
+    args = parser.parse_args()
+    run_evaluation(args)
 
 
 if __name__ == '__main__':
