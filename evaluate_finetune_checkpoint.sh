@@ -4,7 +4,7 @@
 cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
 
 python trainers/evaluate_construction_cost.py \
-    --checkpoint /hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/finetune/tip_finetune_construction_cost_1223_1848/checkpoint_best_rmsle_24_0.1067.ckpt \
+    --checkpoint /hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/finetune/QueryAttentionRegression_1224_2009/checkpoint_best_rmsle_04_0.1454.ckpt \
     --val_csv /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean.csv \
     --test_csv /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/test/test_clean.csv \
     --composite_dir_trainval /hdd/hiep/CODE/Construction_Cost_Prediction/data/trainval_composite \
