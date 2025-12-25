@@ -191,9 +191,9 @@ regression_head:
 batch_size: 32
 lr: 3e-4  # Pretrain LR (not used in fine-tuning, but required by run.py)
 weight_decay: 1e-5  # Pretrain weight decay (not used in fine-tuning, but required by run.py)
-lr_finetune: 5e-5  # Fine-tuning learning rate (reduced from 1e-4 for better convergence)
+lr_finetune: 1e-4  # Fine-tuning learning rate (reduced from 1e-4 for better convergence)
 weight_decay_finetune: 1e-5  # Fine-tuning weight decay
-regressor_lr_multiplier: 5.0  # Multiplier for regression head LR (reduced from 10.0 to 5.0 for better convergence)
+regressor_lr_multiplier: 1.0  # Multiplier for regression head LR (reduced from 10.0 to 5.0 for better convergence)
 max_epochs: 200
 log_every_n_steps: 1  # Log every step (since we have small number of batches ~13)
 
@@ -222,6 +222,11 @@ val_check_interval: 1.0  # Check validation every epoch
 eval_metric: rmsle  # Metric to monitor for best checkpoint (rmsle, mae, rmse) - rmsle is primary
 limit_train_batches: null  # Use all training batches
 limit_val_batches: null  # Use all validation batches
+
+# Early Stopping Configuration
+use_early_stopping: true  # Enable/disable early stopping
+early_stopping_patience: 20  # Number of epochs to wait before stopping (will be multiplied by 1/val_check_interval)
+early_stopping_min_delta: 0.0002  # Minimum change to qualify as an improvement
 limit_test_batches: null  # Use all test batches
 gpus: 1
 num_workers: 4

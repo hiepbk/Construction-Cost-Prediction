@@ -402,13 +402,23 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
         save_on_train_epoch_end=True,
         auto_insert_metric_name=False
     ))
-    callbacks.append(EarlyStopping(
-        monitor=f'eval.val.{hparams.eval_metric}',
-        min_delta=0.0002,
-        patience=int(10 * (1 / hparams.val_check_interval)),
-        verbose=False,
-        mode=mode
-    ))
+    # Early stopping (optional, can be disabled via config)
+    use_early_stopping = getattr(hparams, 'use_early_stopping', True)
+    if use_early_stopping:
+        early_stopping_patience = getattr(hparams, 'early_stopping_patience', 10)
+        early_stopping_min_delta = getattr(hparams, 'early_stopping_min_delta', 0.0002)
+        # Patience is multiplied by (1 / val_check_interval) to account for validation frequency
+        patience = int(early_stopping_patience * (1 / hparams.val_check_interval))
+        callbacks.append(EarlyStopping(
+            monitor=f'eval.val.{hparams.eval_metric}',
+            min_delta=early_stopping_min_delta,
+            patience=patience,
+            verbose=True,  # Set to True to see when early stopping triggers
+            mode=mode
+        ))
+        print(f"✅ Early stopping enabled: patience={patience} epochs, min_delta={early_stopping_min_delta}")
+    else:
+        print("⚠️  Early stopping disabled - training will run for full max_epochs")
     if hparams.use_wandb:
         callbacks.append(LearningRateMonitor(logging_interval='epoch'))
     
