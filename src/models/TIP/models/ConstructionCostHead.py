@@ -63,22 +63,40 @@ class RegressionMLP(nn.Module):
         self.target_log_transform = target_log_transform
         self.huber_delta = huber_delta
         
-        # loss_type must be dict (multi-loss with weights) - no string support
-        # Convert DictConfig to regular dict if needed (preprocess before using)
+        # Parse loss_type: REQUIRES new format with self_weight and global_weight
+        # Format: {"rmsle": {"self_weight": 1.0, "global_weight": 0.2}, ...}
+        # Convert DictConfig to dict if needed
         if isinstance(loss_type, DictConfig):
             loss_type = dict(loss_type)
         
-        # Now loss_type must be a regular dict
         if not isinstance(loss_type, dict):
-            raise ValueError(f"loss_type must be dict or DictConfig, got {type(loss_type)}. Example: {{'rmsle': 0.7, 'mae': 0.2, 'rmse': 0.1}}")
+            raise ValueError(f"loss_type must be dict or DictConfig, got {type(loss_type)}")
         
-        # Store loss config (which losses to use and their weights)
-        self.loss_config = loss_type.copy()
+        self.loss_config = {}
+        self.loss_self_weights = {}  # self_weight for normalization
+        self.loss_global_weights = {}  # global_weight for contribution to total
         
-        # Normalize weights to sum to 1.0 (optional, but good practice)
-        total_weight = sum(self.loss_config.values())
-        if total_weight > 0:
-            self.loss_config = {k: v / total_weight for k, v in self.loss_config.items()}
+        for loss_name, loss_config in loss_type.items():
+            if not isinstance(loss_config, dict):
+                raise ValueError(
+                    f"Loss '{loss_name}' config must be a dict with 'self_weight' and 'global_weight'. "
+                    f"Got: {type(loss_config)}. Example: {{'self_weight': 1.0, 'global_weight': 0.2}}"
+                )
+            
+            if 'self_weight' not in loss_config or 'global_weight' not in loss_config:
+                raise ValueError(
+                    f"Loss '{loss_name}' config must have both 'self_weight' and 'global_weight'. "
+                    f"Got: {loss_config}. Example: {{'self_weight': 1.0, 'global_weight': 0.2}}"
+                )
+            
+            self.loss_self_weights[loss_name] = float(loss_config['self_weight'])
+            self.loss_global_weights[loss_name] = float(loss_config['global_weight'])
+            self.loss_config[loss_name] = loss_config  # Store full config for reference
+        
+        # Normalize global weights to sum to 1.0 (optional, but good practice)
+        total_global_weight = sum(self.loss_global_weights.values())
+        if total_global_weight > 0:
+            self.loss_global_weights = {k: v / total_global_weight for k, v in self.loss_global_weights.items()}
         
         # Store primary loss name for backward compatibility
         self.loss_type = list(self.loss_config.keys())[0] if self.loss_config else 'rmsle'
@@ -277,9 +295,15 @@ class RegressionMLP(nn.Module):
         loss_dict['rmse'] = rmse
         
         # Calculate total weighted loss (only losses in loss_config contribute)
-        for loss_name, weight in self.loss_config.items():
+        # Formula: normalized_loss = self_weight * raw_loss, then contribution = global_weight * normalized_loss
+        for loss_name in self.loss_config.keys():
             if loss_name in loss_dict:
-                total_loss = total_loss + weight * loss_dict[loss_name]
+                raw_loss = loss_dict[loss_name]
+                self_weight = self.loss_self_weights.get(loss_name, 1.0)
+                global_weight = self.loss_global_weights.get(loss_name, 1.0)
+                normalized_loss = self_weight * raw_loss
+                contribution = global_weight * normalized_loss
+                total_loss = total_loss + contribution
             else:
                 raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
         
@@ -335,22 +359,40 @@ class RegressionMLPTest(nn.Module):
         self.target_log_transform = target_log_transform
         self.huber_delta = huber_delta
         
-        # loss_type must be dict (multi-loss with weights) - no string support
-        # Convert DictConfig to regular dict if needed (preprocess before using)
+        # Parse loss_type: REQUIRES new format with self_weight and global_weight
+        # Format: {"rmsle": {"self_weight": 1.0, "global_weight": 0.2}, ...}
+        # Convert DictConfig to dict if needed
         if isinstance(loss_type, DictConfig):
             loss_type = dict(loss_type)
         
-        # Now loss_type must be a regular dict
         if not isinstance(loss_type, dict):
-            raise ValueError(f"loss_type must be dict or DictConfig, got {type(loss_type)}. Example: {{'rmsle': 0.7, 'mae': 0.2, 'rmse': 0.1}}")
+            raise ValueError(f"loss_type must be dict or DictConfig, got {type(loss_type)}")
         
-        # Store loss config (which losses to use and their weights)
-        self.loss_config = loss_type.copy()
+        self.loss_config = {}
+        self.loss_self_weights = {}  # self_weight for normalization
+        self.loss_global_weights = {}  # global_weight for contribution to total
         
-        # Normalize weights to sum to 1.0 (optional, but good practice)
-        total_weight = sum(self.loss_config.values())
-        if total_weight > 0:
-            self.loss_config = {k: v / total_weight for k, v in self.loss_config.items()}
+        for loss_name, loss_config in loss_type.items():
+            if not isinstance(loss_config, dict):
+                raise ValueError(
+                    f"Loss '{loss_name}' config must be a dict with 'self_weight' and 'global_weight'. "
+                    f"Got: {type(loss_config)}. Example: {{'self_weight': 1.0, 'global_weight': 0.2}}"
+                )
+            
+            if 'self_weight' not in loss_config or 'global_weight' not in loss_config:
+                raise ValueError(
+                    f"Loss '{loss_name}' config must have both 'self_weight' and 'global_weight'. "
+                    f"Got: {loss_config}. Example: {{'self_weight': 1.0, 'global_weight': 0.2}}"
+                )
+            
+            self.loss_self_weights[loss_name] = float(loss_config['self_weight'])
+            self.loss_global_weights[loss_name] = float(loss_config['global_weight'])
+            self.loss_config[loss_name] = loss_config  # Store full config for reference
+        
+        # Normalize global weights to sum to 1.0 (optional, but good practice)
+        total_global_weight = sum(self.loss_global_weights.values())
+        if total_global_weight > 0:
+            self.loss_global_weights = {k: v / total_global_weight for k, v in self.loss_global_weights.items()}
         
         # Store primary loss name for backward compatibility
         self.loss_type = list(self.loss_config.keys())[0] if self.loss_config else 'rmsle'
@@ -547,9 +589,15 @@ class RegressionMLPTest(nn.Module):
         loss_dict['rmse'] = rmse
         
         # Calculate total weighted loss (only losses in loss_config contribute)
-        for loss_name, weight in self.loss_config.items():
+        # Formula: normalized_loss = self_weight * raw_loss, then contribution = global_weight * normalized_loss
+        for loss_name in self.loss_config.keys():
             if loss_name in loss_dict:
-                total_loss = total_loss + weight * loss_dict[loss_name]
+                raw_loss = loss_dict[loss_name]
+                self_weight = self.loss_self_weights.get(loss_name, 1.0)
+                global_weight = self.loss_global_weights.get(loss_name, 1.0)
+                normalized_loss = self_weight * raw_loss
+                contribution = global_weight * normalized_loss
+                total_loss = total_loss + contribution
             else:
                 raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
         
@@ -937,9 +985,15 @@ class MixtureOfExpertsRegression(nn.Module):
         loss_dict['rmse'] = rmse
         
         # Calculate total weighted loss (only losses in loss_config contribute)
-        for loss_name, weight in self.loss_config.items():
+        # Formula: normalized_loss = self_weight * raw_loss, then contribution = global_weight * normalized_loss
+        for loss_name in self.loss_config.keys():
             if loss_name in loss_dict:
-                total_loss = total_loss + weight * loss_dict[loss_name]
+                raw_loss = loss_dict[loss_name]
+                self_weight = self.loss_self_weights.get(loss_name, 1.0)
+                global_weight = self.loss_global_weights.get(loss_name, 1.0)
+                normalized_loss = self_weight * raw_loss
+                contribution = global_weight * normalized_loss
+                total_loss = total_loss + contribution
             else:
                 raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
         
@@ -998,22 +1052,40 @@ class AttentionAggregationRegression(nn.Module):
         self.target_log_transform = target_log_transform
         self.huber_delta = huber_delta
         
-        # loss_type must be dict (multi-loss with weights) - no string support
-        # Convert DictConfig to regular dict if needed (preprocess before using)
+        # Parse loss_type: REQUIRES new format with self_weight and global_weight
+        # Format: {"rmsle": {"self_weight": 1.0, "global_weight": 0.2}, ...}
+        # Convert DictConfig to dict if needed
         if isinstance(loss_type, DictConfig):
             loss_type = dict(loss_type)
         
-        # Now loss_type must be a regular dict
         if not isinstance(loss_type, dict):
-            raise ValueError(f"loss_type must be dict or DictConfig, got {type(loss_type)}. Example: {{'rmsle': 0.7, 'mae': 0.2, 'rmse': 0.1}}")
+            raise ValueError(f"loss_type must be dict or DictConfig, got {type(loss_type)}")
         
-        # Store loss config (which losses to use and their weights)
-        self.loss_config = loss_type.copy()
+        self.loss_config = {}
+        self.loss_self_weights = {}  # self_weight for normalization
+        self.loss_global_weights = {}  # global_weight for contribution to total
         
-        # Normalize weights to sum to 1.0 (optional, but good practice)
-        total_weight = sum(self.loss_config.values())
-        if total_weight > 0:
-            self.loss_config = {k: v / total_weight for k, v in self.loss_config.items()}
+        for loss_name, loss_config in loss_type.items():
+            if not isinstance(loss_config, dict):
+                raise ValueError(
+                    f"Loss '{loss_name}' config must be a dict with 'self_weight' and 'global_weight'. "
+                    f"Got: {type(loss_config)}. Example: {{'self_weight': 1.0, 'global_weight': 0.2}}"
+                )
+            
+            if 'self_weight' not in loss_config or 'global_weight' not in loss_config:
+                raise ValueError(
+                    f"Loss '{loss_name}' config must have both 'self_weight' and 'global_weight'. "
+                    f"Got: {loss_config}. Example: {{'self_weight': 1.0, 'global_weight': 0.2}}"
+                )
+            
+            self.loss_self_weights[loss_name] = float(loss_config['self_weight'])
+            self.loss_global_weights[loss_name] = float(loss_config['global_weight'])
+            self.loss_config[loss_name] = loss_config  # Store full config for reference
+        
+        # Normalize global weights to sum to 1.0 (optional, but good practice)
+        total_global_weight = sum(self.loss_global_weights.values())
+        if total_global_weight > 0:
+            self.loss_global_weights = {k: v / total_global_weight for k, v in self.loss_global_weights.items()}
         
         # Store primary loss name for backward compatibility
         self.loss_type = list(self.loss_config.keys())[0] if self.loss_config else 'rmsle'
@@ -1274,9 +1346,15 @@ class AttentionAggregationRegression(nn.Module):
         loss_dict['rmse'] = rmse
         
         # Calculate total weighted loss (only losses in loss_config contribute)
-        for loss_name, weight in self.loss_config.items():
+        # Formula: normalized_loss = self_weight * raw_loss, then contribution = global_weight * normalized_loss
+        for loss_name in self.loss_config.keys():
             if loss_name in loss_dict:
-                total_loss = total_loss + weight * loss_dict[loss_name]
+                raw_loss = loss_dict[loss_name]
+                self_weight = self.loss_self_weights.get(loss_name, 1.0)
+                global_weight = self.loss_global_weights.get(loss_name, 1.0)
+                normalized_loss = self_weight * raw_loss
+                contribution = global_weight * normalized_loss
+                total_loss = total_loss + contribution
             else:
                 raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
         
@@ -1624,29 +1702,39 @@ class MultiTaskCountryAwareRegression(nn.Module):
         if not isinstance(loss_type, dict):
             raise ValueError(f"loss_type must be dict or DictConfig, got {type(loss_type)}")
         
-        self.loss_config = loss_type.copy()
+        # Parse loss_type: REQUIRES new format with self_weight and global_weight
+        # Format: {"rmsle": {"self_weight": 1.0, "global_weight": 0.2}, ...}
+        self.loss_config = {}
+        self.loss_self_weights = {}  # self_weight for normalization
+        self.loss_global_weights = {}  # global_weight for contribution to total
         
-        # Extract country_classification weight from loss_type (if present)
-        # This is the weight for the classification loss in multi-task learning
-        self.country_classification_weight = self.loss_config.pop('country_classification', None)
+        for loss_name, loss_config in loss_type.items():
+            if not isinstance(loss_config, dict):
+                raise ValueError(
+                    f"Loss '{loss_name}' config must be a dict with 'self_weight' and 'global_weight'. "
+                    f"Got: {type(loss_config)}. Example: {{'self_weight': 1.0, 'global_weight': 0.2}}"
+                )
+            
+            if 'self_weight' not in loss_config or 'global_weight' not in loss_config:
+                raise ValueError(
+                    f"Loss '{loss_name}' config must have both 'self_weight' and 'global_weight'. "
+                    f"Got: {loss_config}. Example: {{'self_weight': 1.0, 'global_weight': 0.2}}"
+                )
+            
+            self.loss_self_weights[loss_name] = float(loss_config['self_weight'])
+            self.loss_global_weights[loss_name] = float(loss_config['global_weight'])
+            self.loss_config[loss_name] = loss_config  # Store full config for reference
         
-        # Normalize remaining regression losses
-        total_weight = sum(self.loss_config.values())
-        if total_weight > 0:
-            self.loss_config = {k: v / total_weight for k, v in self.loss_config.items()}
+        # All losses (including classification) are treated equally in loss_config
+        # No special treatment - classification_ce will be looked up in loss_config just like rmsle, mse, etc.
+        
+        # Normalize global weights to sum to 1.0 (optional, but good practice)
+        # This applies to ALL losses including classification
+        total_global_weight = sum(self.loss_global_weights.values())
+        if total_global_weight > 0:
+            self.loss_global_weights = {k: v / total_global_weight for k, v in self.loss_global_weights.items()}
         
         self.loss_type = list(self.loss_config.keys())[0] if self.loss_config else 'rmsle'
-        
-        # If country_classification weight not specified, default to primary regression loss weight
-        # This makes classification and regression equally important in multi-task learning
-        if self.country_classification_weight is None:
-            primary_loss_weight = (
-                self.loss_config.get('rmsle') or 
-                self.loss_config.get('mse') or 
-                self.loss_config.get('rmse') or 
-                list(self.loss_config.values())[0] if self.loss_config else 1.0
-            )
-            self.country_classification_weight = primary_loss_weight
         
         # Classification branch: predicts class probabilities (like YOLO/DETR)
         # These probabilities serve as confidence scores
@@ -1819,19 +1907,28 @@ class MultiTaskCountryAwareRegression(nn.Module):
         rmse = torch.sqrt(mse)
         loss_dict['rmse'] = rmse
         
-        # Calculate regression total loss (only losses in loss_config contribute)
+        # Calculate total loss: ALL losses (including classification) are treated equally
+        # Formula for each loss: normalized_loss = self_weight * raw_loss, then contribution = global_weight * normalized_loss
+        total_loss = 0.0
         regression_total = 0.0
-        for loss_name, weight in self.loss_config.items():
+        
+        # Process ALL losses in the same loop (classification_ce is just another loss like rmsle, mse, etc.)
+        for loss_name in self.loss_config.keys():
             if loss_name in loss_dict:
-                regression_total = regression_total + weight * loss_dict[loss_name]
+                raw_loss = loss_dict[loss_name]
+                self_weight = self.loss_self_weights.get(loss_name, 1.0)
+                global_weight = self.loss_global_weights.get(loss_name, 1.0)
+                normalized_loss = self_weight * raw_loss
+                contribution = global_weight * normalized_loss
+                total_loss = total_loss + contribution  # ALL losses (including classification_ce) go to total_loss for backprop
+                
+                # Track regression losses separately for monitoring (exclude classification_ce from regression_total only)
+                if loss_name != 'classification_ce':
+                    regression_total = regression_total + contribution
             else:
                 raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
         
         loss_dict['regression'] = regression_total
-        
-        # Total loss: classification + regression
-        # country_classification weight comes from loss_type config
-        total_loss = self.country_classification_weight * classification_loss + regression_total
         loss_dict['total'] = total_loss
         
         return loss_dict

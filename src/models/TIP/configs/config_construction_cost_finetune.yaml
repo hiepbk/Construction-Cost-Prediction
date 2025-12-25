@@ -180,8 +180,12 @@ regression_head:
   n_hidden: 2048
   gate_hidden: 256    # optional, defaults to n_input//2
   loss_type:
-    rmsle: 1.0
-    # country_classification: 1.0  # Uncomment to enable multi-task head (classification + regression)
+    rmsle:
+      self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
+      global_weight: 1.0  # Weight for contribution to total loss (percentage/contribution)
+    # classification_ce:  # Uncomment to enable multi-task head (classification + regression)
+    #   self_weight: 1.0
+    #   global_weight: 0.2
                                   # Weight for country classification loss (equal to rmsle for balanced multi-task)
   
   # Overall target statistics (used when country-specific stats not provided)

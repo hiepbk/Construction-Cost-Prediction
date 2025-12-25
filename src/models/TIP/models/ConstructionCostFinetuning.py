@@ -163,9 +163,11 @@ class ConstructionCostFinetuning(pl.LightningModule):
                 self.log('train_rmsle', loss_value, on_epoch=True, on_step=False, prog_bar=True, logger=False, sync_dist=True, batch_size=batch_size)
         
         # Log country classification accuracy (if multi-task head)
-        if 'country_ce' in loss_dict and country_gt is not None:
-            country_pred = head_result.get('country_pred', None)
-            if country_pred is not None:
+        if 'classification_ce' in loss_dict and country_gt is not None:
+            # Get predicted country from classification logits
+            classification_logits = head_result.get('classification_logits', None)
+            if classification_logits is not None:
+                country_pred = classification_logits.argmax(dim=1)  # (B,)
                 country_acc = (country_pred == country_gt).float().mean()
                 self.log('finetune.train.country_acc', country_acc, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
         
@@ -246,9 +248,12 @@ class ConstructionCostFinetuning(pl.LightningModule):
             self.log(f'finetune.val.{loss_name}', loss_value, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
         
         # Log country classification accuracy (if multi-task head)
-        if 'country_ce' in loss_dict and country_gt is not None:
-            country_pred = head_result.get('country_pred', None)
-            if country_pred is not None:
+        # Log country classification accuracy (if multi-task head)
+        if 'classification_ce' in loss_dict and country_gt is not None:
+            # Get predicted country from classification logits
+            classification_logits = head_result.get('classification_logits', None)
+            if classification_logits is not None:
+                country_pred = classification_logits.argmax(dim=1)  # (B,)
                 country_acc = (country_pred == country_gt).float().mean()
                 self.log('finetune.val.country_acc', country_acc, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
     
