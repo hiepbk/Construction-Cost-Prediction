@@ -1511,11 +1511,15 @@ class DualPoolRegression(RegressionMLP):
 class MultiTaskCountryAwareRegression(nn.Module):
     """
     Multi-task head with parallel branches: classification + per-class regression.
-    Mimics YOLO/DETR object detection heads (decoupled head design).
+    Uses attention-based feature aggregation (like AttentionAggregationRegression) 
+    combined with multi-task learning (like YOLO/DETR object detection heads).
     
-    Architecture (like YOLO/DETR):
+    Architecture:
     - Input: (B, N, n_input) multimodal features
-    - Shared aggregation: Mean pooling -> (B, n_input)
+    - Attention-based aggregation:
+      - Multi-head self-attention: Learn token importance -> (B, N, n_input)
+      - Residual connection + LayerNorm
+      - Mean pooling over sequence -> (B, n_input)
     - Classification Branch: MLP -> (B, num_countries) class logits
       - Class probabilities (softmax) serve as confidence scores
     - Regression Branch: MLP -> (B, num_countries) regression values
@@ -1537,6 +1541,7 @@ class MultiTaskCountryAwareRegression(nn.Module):
             - If 'country_classification' not specified, defaults to primary regression loss weight
         n_hidden: Optional[int] - Hidden dimension (default: 2048)
         p: float - Dropout probability (default: 0.2)
+        num_heads: int - Number of attention heads (default: 8)
         num_countries: int - Number of country classes (default: 2)
         confidence_threshold: float - Threshold for confidence score (default: 0.5) - unused, kept for compatibility
         target_mean: float - Overall mean (used when country-specific stats not provided)
@@ -1552,6 +1557,7 @@ class MultiTaskCountryAwareRegression(nn.Module):
         loss_type: Dict[str, float],
         n_hidden: Optional[int] = None,
         p: float = 0.2,
+        num_heads: int = 8,
         num_countries: int = 2,
         confidence_threshold: float = 0.5,
         target_mean: float = 0.0,
@@ -1571,6 +1577,23 @@ class MultiTaskCountryAwareRegression(nn.Module):
         self.confidence_threshold = confidence_threshold
         self.target_log_transform = target_log_transform
         self.huber_delta = huber_delta
+        
+        # Ensure num_heads divides n_input (like AttentionAggregationRegression)
+        if n_input % num_heads != 0:
+            # Adjust num_heads to be compatible
+            num_heads = max(1, n_input // (n_input // num_heads))
+            print(f"⚠️  Adjusted num_heads to {num_heads} to be compatible with n_input={n_input}")
+        
+        # Multi-head self-attention for learning token importance (like AttentionAggregationRegression)
+        self.attention = nn.MultiheadAttention(
+            embed_dim=n_input,
+            num_heads=num_heads,
+            dropout=p,
+            batch_first=True  # (B, N, n_input) format
+        )
+        
+        # Layer norm after attention (like AttentionAggregationRegression)
+        self.attention_norm = nn.LayerNorm(n_input)
         
         # Store normalization parameters
         # MultiTaskCountryAwareRegression REQUIRES country-specific stats
@@ -1630,6 +1653,7 @@ class MultiTaskCountryAwareRegression(nn.Module):
         
         # Classification branch: predicts class probabilities (like YOLO/DETR)
         # These probabilities serve as confidence scores
+        # Uses attention-aggregated features instead of simple mean pooling
         self.classification_head = nn.Sequential(
             nn.Linear(n_input, n_hidden),
             nn.BatchNorm1d(n_hidden),
@@ -1640,6 +1664,7 @@ class MultiTaskCountryAwareRegression(nn.Module):
         
         # Regression branch: predicts regression value for each class (like YOLO/DETR)
         # Each class gets its own regression prediction
+        # Uses attention-aggregated features instead of simple mean pooling
         self.regression_head = nn.Sequential(
             nn.Linear(n_input, n_hidden),
             nn.BatchNorm1d(n_hidden),
@@ -1852,9 +1877,17 @@ class MultiTaskCountryAwareRegression(nn.Module):
                 - 'selected_country': (B,) - Selected country based on confidence threshold
                 - 'loss_dict': dict - Dictionary of loss components
         """
-        # Aggregate features (mean pooling)
+        # Attention-based feature aggregation (like AttentionAggregationRegression)
         if x.dim() == 3:
-            x_agg = x.mean(dim=1)  # (B, N, n_input) -> (B, n_input)
+            # Step 1: Multi-head self-attention to learn token importance
+            # Self-attention: query, key, value all from x
+            attn_output, attn_weights = self.attention(x, x, x)  # (B, N, n_input)
+            
+            # Step 2: Residual connection + layer norm
+            x_attn = self.attention_norm(x + attn_output)  # (B, N, n_input)
+            
+            # Step 3: Mean pooling over sequence (after attention has learned importance)
+            x_agg = torch.mean(x_attn, dim=1)  # (B, n_input)
         else:
             x_agg = x  # Already (B, n_input)
         

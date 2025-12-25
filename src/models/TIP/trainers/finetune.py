@@ -410,7 +410,7 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     
     callbacks = []
     # Save best checkpoint based on validation metric (include metric value in filename)
-    metric_key = f'eval.val.{hparams.eval_metric}'
+    metric_key = f'finetune.val.{hparams.eval_metric}'
     # Format: checkpoint_best_{metric}_{epoch:02d}_{metric_value:.4f}
     # Use double braces {{ }} so PyTorch Lightning can format them
     callbacks.append(ModelCheckpoint(
@@ -437,7 +437,7 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
         # Patience is multiplied by (1 / val_check_interval) to account for validation frequency
         patience = int(early_stopping_patience * (1 / hparams.val_check_interval))
         callbacks.append(EarlyStopping(
-            monitor=f'eval.val.{hparams.eval_metric}',
+            monitor=f'finetune.val.{hparams.eval_metric}',
             min_delta=early_stopping_min_delta,
             patience=patience,
             verbose=True,  # Set to True to see when early stopping triggers
@@ -493,7 +493,7 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     best_score = getattr(model, 'best_val_score', None)
     if best_score is None:
         # Try to get from callback metrics
-        metric_key = f'eval.val.{hparams.eval_metric}'
+        metric_key = f'finetune.val.{hparams.eval_metric}'
         if metric_key in trainer.callback_metrics:
             best_score = trainer.callback_metrics[metric_key].item()
     

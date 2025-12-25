@@ -169,27 +169,21 @@ class ConstructionCostFinetuning(pl.LightningModule):
         
         # Log losses from head (already calculated internally) - no need for manual metric calculation
         batch_size = y_hat_original.shape[0] if len(y_hat_original.shape) > 0 else 1
-        self.log('eval.train.loss', loss, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        self.log('finetune.train.loss', loss, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
         
-        # Log individual losses from head (already calculated, no need to recompute)
-        if 'rmsle' in loss_dict:
-            self.log('eval.train.rmsle', loss_dict['rmsle'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
-            self.log('train_rmsle', loss_dict['rmsle'], on_epoch=True, on_step=False, prog_bar=True, logger=False, sync_dist=True, batch_size=batch_size)
-        if 'mae' in loss_dict:
-            self.log('eval.train.mae', loss_dict['mae'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
-        if 'rmse' in loss_dict:
-            self.log('eval.train.rmse', loss_dict['rmse'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
-        if 'huber' in loss_dict:
-            self.log('eval.train.huber', loss_dict['huber'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
-        if 'mse' in loss_dict:
-            self.log('eval.train.mse', loss_dict['mse'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        # Log individual losses from head (automatically loop through all losses)
+        for loss_name, loss_value in loss_dict.items():
+            self.log(f'finetune.train.{loss_name}', loss_value, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+            # Also log RMSLE to prog_bar for quick monitoring
+            if loss_name == 'rmsle':
+                self.log('train_rmsle', loss_value, on_epoch=True, on_step=False, prog_bar=True, logger=False, sync_dist=True, batch_size=batch_size)
         
         # Log country classification accuracy (if multi-task head)
         if 'country_ce' in loss_dict and country_gt is not None:
             country_pred = head_result.get('country_pred', None)
             if country_pred is not None:
                 country_acc = (country_pred == country_gt).float().mean()
-                self.log('eval.train.country_acc', country_acc, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+                self.log('finetune.train.country_acc', country_acc, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
         
         return loss
     
@@ -274,26 +268,18 @@ class ConstructionCostFinetuning(pl.LightningModule):
         
         # Log losses from head (already calculated) - PyTorch Lightning will aggregate automatically
         batch_size = y_hat_original.shape[0] if len(y_hat_original.shape) > 0 else 1
-        self.log('eval.val.loss', loss, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        self.log('finetune.val.loss', loss, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
         
-        # Log individual losses from head (already calculated)
-        if 'rmsle' in loss_dict:
-            self.log('eval.val.rmsle', loss_dict['rmsle'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
-        if 'mae' in loss_dict:
-            self.log('eval.val.mae', loss_dict['mae'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
-        if 'rmse' in loss_dict:
-            self.log('eval.val.rmse', loss_dict['rmse'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
-        if 'huber' in loss_dict:
-            self.log('eval.val.huber', loss_dict['huber'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
-        if 'mse' in loss_dict:
-            self.log('eval.val.mse', loss_dict['mse'], on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        # Log individual losses from head (automatically loop through all losses)
+        for loss_name, loss_value in loss_dict.items():
+            self.log(f'finetune.val.{loss_name}', loss_value, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
         
         # Log country classification accuracy (if multi-task head)
         if 'country_ce' in loss_dict and country_gt is not None:
             country_pred = head_result.get('country_pred', None)
             if country_pred is not None:
                 country_acc = (country_pred == country_gt).float().mean()
-                self.log('eval.val.country_acc', country_acc, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+                self.log('finetune.val.country_acc', country_acc, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
     
     def on_validation_epoch_start(self) -> None:
         """Clear tracked predictions and losses at start of validation epoch"""
@@ -330,9 +316,9 @@ class ConstructionCostFinetuning(pl.LightningModule):
         
         # Log aggregated metrics (already logged per-batch, but log here for clarity and best checkpoint tracking)
         batch_size = 1  # Not needed for epoch-level logging
-        self.log('eval.val.mae', mae_val, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
-        self.log('eval.val.rmse', rmse_val, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
-        self.log('eval.val.rmsle', rmsle_val, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)  # Primary metric
+        self.log('finetune.val.mae', mae_val, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        self.log('finetune.val.rmse', rmse_val, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)
+        self.log('finetune.val.rmsle', rmsle_val, on_epoch=True, on_step=False, sync_dist=True, batch_size=batch_size)  # Primary metric
         # Primary metric for progress bar
         self.log('val_rmsle', rmsle_val, on_epoch=True, on_step=False, prog_bar=True, logger=False, sync_dist=True, batch_size=batch_size)
         
@@ -527,7 +513,7 @@ class ConstructionCostFinetuning(pl.LightningModule):
                 "optimizer": optimizer,
                 "lr_scheduler": {
                     "scheduler": scheduler,
-                    "monitor": 'eval.val.loss',
+                    "monitor": 'finetune.val.loss',
                     "strict": False
                 }
             }

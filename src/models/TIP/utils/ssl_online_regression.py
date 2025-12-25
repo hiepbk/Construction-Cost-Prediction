@@ -304,17 +304,9 @@ class SSLOnlineEvaluatorRegression(Callback):
         # Log losses from head (already calculated internally) - no need for manual metric calculation
         pl_module.log("regression_online.train.loss", loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         
-        # Log individual losses from head (for monitoring)
-        if 'rmsle' in loss_dict:
-            pl_module.log("regression_online.train.rmsle", loss_dict['rmsle'], on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
-        if 'mae' in loss_dict:
-            pl_module.log("regression_online.train.mae", loss_dict['mae'], on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
-        if 'rmse' in loss_dict:
-            pl_module.log("regression_online.train.rmse", loss_dict['rmse'], on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
-        if 'huber' in loss_dict:
-            pl_module.log("regression_online.train.huber", loss_dict['huber'], on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
-        if 'mse' in loss_dict:
-            pl_module.log("regression_online.train.mse", loss_dict['mse'], on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        # Log individual losses from head (automatically loop through all losses)
+        for loss_name, loss_value in loss_dict.items():
+            pl_module.log(f"regression_online.train.{loss_name}", loss_value, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
     
     def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Initialize tracking at the start of validation epoch."""
@@ -376,17 +368,9 @@ class SSLOnlineEvaluatorRegression(Callback):
         # Log losses from head (already calculated) - PyTorch Lightning will aggregate automatically
         pl_module.log("regression_online.val.loss", loss, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         
-        # Log individual losses from head (for monitoring)
-        if 'rmsle' in loss_dict:
-            pl_module.log("regression_online.val.rmsle", loss_dict['rmsle'], on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
-        if 'mae' in loss_dict:
-            pl_module.log("regression_online.val.mae", loss_dict['mae'], on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
-        if 'rmse' in loss_dict:
-            pl_module.log("regression_online.val.rmse", loss_dict['rmse'], on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
-        if 'huber' in loss_dict:
-            pl_module.log("regression_online.val.huber", loss_dict['huber'], on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
-        if 'mse' in loss_dict:
-            pl_module.log("regression_online.val.mse", loss_dict['mse'], on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+        # Log individual losses from head (automatically loop through all losses)
+        for loss_name, loss_value in loss_dict.items():
+            pl_module.log(f"regression_online.val.{loss_name}", loss_value, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
     
     def on_train_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         """Log training metrics at epoch end."""
