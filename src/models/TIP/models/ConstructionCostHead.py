@@ -12,6 +12,7 @@ Available heads:
 """
 from typing import Optional, Dict, Tuple
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 from omegaconf import DictConfig
 
@@ -1507,6 +1508,412 @@ class DualPoolRegression(RegressionMLP):
         return result
 
 
+class MultiTaskCountryAwareRegression(nn.Module):
+    """
+    Multi-task head with parallel branches: classification + per-class regression.
+    Mimics YOLO/DETR object detection heads (decoupled head design).
+    
+    Architecture (like YOLO/DETR):
+    - Input: (B, N, n_input) multimodal features
+    - Shared aggregation: Mean pooling -> (B, n_input)
+    - Classification Branch: MLP -> (B, num_countries) class logits
+      - Class probabilities (softmax) serve as confidence scores
+    - Regression Branch: MLP -> (B, num_countries) regression values
+      - One regression value per class (like bounding box per class in object detection)
+    - Final prediction: Weighted sum using classification probabilities (standard YOLO approach)
+    
+    Loss Calculation (like object detection):
+    - Classification loss: Cross-entropy on class logits
+    - Regression loss: Only computed for ground truth class (standard object detection)
+    
+    Normalization:
+    - REQUIRES target_mean_by_country and target_std_by_country (country-specific normalization)
+    
+    Args:
+        n_input: int - Input dimension (embedding size)
+        loss_type: Dict[str, float] - Loss names and weights for regression and classification
+            - Regression losses: 'rmsle', 'mse', 'rmse', 'mae', 'huber'
+            - Classification loss: 'country_classification' (weight for country classification loss)
+            - If 'country_classification' not specified, defaults to primary regression loss weight
+        n_hidden: Optional[int] - Hidden dimension (default: 2048)
+        p: float - Dropout probability (default: 0.2)
+        num_countries: int - Number of country classes (default: 2)
+        confidence_threshold: float - Threshold for confidence score (default: 0.5) - unused, kept for compatibility
+        target_mean: float - Overall mean (used when country-specific stats not provided)
+        target_std: float - Overall std (used when country-specific stats not provided)
+        target_mean_by_country: Optional[Dict[int, float]] - Country-specific means {0: mean0, 1: mean1}
+        target_std_by_country: Optional[Dict[int, float]] - Country-specific stds {0: std0, 1: std1}
+        target_log_transform: bool - Whether target is log-transformed (default: True)
+        huber_delta: float - Delta parameter for Huber loss (default: 1.0)
+    """
+    def __init__(
+        self,
+        n_input: int,
+        loss_type: Dict[str, float],
+        n_hidden: Optional[int] = None,
+        p: float = 0.2,
+        num_countries: int = 2,
+        confidence_threshold: float = 0.5,
+        target_mean: float = 0.0,
+        target_std: float = 1.0,
+        target_mean_by_country: Optional[Dict[int, float]] = None,
+        target_std_by_country: Optional[Dict[int, float]] = None,
+        target_log_transform: bool = True,
+        huber_delta: float = 1.0,
+    ):
+        super().__init__()
+        
+        # IMPORTANT: Default to 2048 (matching old checkpoint architecture) for best results
+        n_hidden = n_hidden if n_hidden is not None else 2048
+        
+        # Store configuration
+        self.num_countries = num_countries
+        self.confidence_threshold = confidence_threshold
+        self.target_log_transform = target_log_transform
+        self.huber_delta = huber_delta
+        
+        # Store normalization parameters
+        # MultiTaskCountryAwareRegression REQUIRES country-specific stats
+        if not target_mean_by_country or not target_std_by_country:
+            raise ValueError(
+                "MultiTaskCountryAwareRegression requires target_mean_by_country and target_std_by_country to be provided. "
+                f"Got target_mean_by_country={target_mean_by_country}, target_std_by_country={target_std_by_country}"
+            )
+        
+        self.target_mean = target_mean  # Kept for backward compatibility, but not used
+        self.target_std = target_std  # Kept for backward compatibility, but not used
+        self.target_mean_by_country = target_mean_by_country
+        self.target_std_by_country = target_std_by_country
+        
+        # Validate that both dicts have matching keys
+        if set(self.target_mean_by_country.keys()) != set(self.target_std_by_country.keys()):
+            raise ValueError(
+                f"target_mean_by_country and target_std_by_country must have the same class IDs. "
+                f"Got mean keys: {set(self.target_mean_by_country.keys())}, "
+                f"std keys: {set(self.target_std_by_country.keys())}"
+            )
+        
+        # Store class IDs from config (keys of target_mean_by_country dict)
+        # This tells us how many classes and what their IDs are
+        self.class_ids = sorted(list(self.target_mean_by_country.keys()))
+        
+        # Convert DictConfig to dict if needed
+        if isinstance(loss_type, DictConfig):
+            loss_type = dict(loss_type)
+        
+        if not isinstance(loss_type, dict):
+            raise ValueError(f"loss_type must be dict or DictConfig, got {type(loss_type)}")
+        
+        self.loss_config = loss_type.copy()
+        
+        # Extract country_classification weight from loss_type (if present)
+        # This is the weight for the classification loss in multi-task learning
+        self.country_classification_weight = self.loss_config.pop('country_classification', None)
+        
+        # Normalize remaining regression losses
+        total_weight = sum(self.loss_config.values())
+        if total_weight > 0:
+            self.loss_config = {k: v / total_weight for k, v in self.loss_config.items()}
+        
+        self.loss_type = list(self.loss_config.keys())[0] if self.loss_config else 'rmsle'
+        
+        # If country_classification weight not specified, default to primary regression loss weight
+        # This makes classification and regression equally important in multi-task learning
+        if self.country_classification_weight is None:
+            primary_loss_weight = (
+                self.loss_config.get('rmsle') or 
+                self.loss_config.get('mse') or 
+                self.loss_config.get('rmse') or 
+                list(self.loss_config.values())[0] if self.loss_config else 1.0
+            )
+            self.country_classification_weight = primary_loss_weight
+        
+        # Classification branch: predicts class probabilities (like YOLO/DETR)
+        # These probabilities serve as confidence scores
+        self.classification_head = nn.Sequential(
+            nn.Linear(n_input, n_hidden),
+            nn.BatchNorm1d(n_hidden),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p),
+            nn.Linear(n_hidden, num_countries)  # (B, num_countries) class logits
+        )
+        
+        # Regression branch: predicts regression value for each class (like YOLO/DETR)
+        # Each class gets its own regression prediction
+        self.regression_head = nn.Sequential(
+            nn.Linear(n_input, n_hidden),
+            nn.BatchNorm1d(n_hidden),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p),
+            nn.Linear(n_hidden, n_hidden // 2),
+            nn.BatchNorm1d(n_hidden // 2),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p),
+            nn.Linear(n_hidden // 2, num_countries)  # (B, num_countries) - one value per class
+        )
+        
+        # Loss functions
+        self.cross_entropy = nn.CrossEntropyLoss()
+        self.huber_loss = nn.HuberLoss(reduction='mean', delta=huber_delta)
+    
+    def construction_cost_decode(self, prediction_log: Tensor, country: Optional[Tensor] = None) -> Tensor:
+        """
+        Decode prediction from normalized log space to original scale (USD/m²).
+        Uses country-specific normalization if country-specific stats are provided and country is given.
+        
+        Args:
+            prediction_log: (B,) - Prediction in normalized log space
+            country: Optional (B,) - Country labels for country-specific decoding
+        
+        Returns:
+            (B,) - Prediction in original scale (USD/m²), clamped to >= 0
+        """
+        # Country-specific decoding (vectorized)
+        # MultiTaskCountryAwareRegression always uses country-specific normalization
+        if country is None:
+            raise ValueError(
+                "MultiTaskCountryAwareRegression requires country labels for decoding. "
+                "Got country=None"
+            )
+        
+        # Get country-specific stats for all samples at once
+        country_mean = torch.zeros_like(prediction_log)
+        country_std = torch.ones_like(prediction_log)
+        
+        for country_id in self.class_ids:
+            mask = (country == country_id)
+            if mask.any():
+                if country_id not in self.target_mean_by_country:
+                    raise ValueError(
+                        f"Country ID {country_id} found in data but not in target_mean_by_country. "
+                        f"Available class IDs: {self.class_ids}"
+                    )
+                country_mean[mask] = self.target_mean_by_country[country_id]
+                country_std[mask] = self.target_std_by_country[country_id]
+        
+        # Denormalize (vectorized)
+        pred_log = prediction_log * country_std + country_mean
+        
+        # Reverse log-transform to get original scale
+        if self.target_log_transform:
+            pred_original = torch.expm1(torch.clamp(pred_log, min=-10.0, max=10.0))
+        else:
+            pred_original = pred_log
+        
+        # Ensure non-negative
+        pred_original = torch.clamp(pred_original, min=0.0)
+        return pred_original
+    
+    def calculate_loss(
+        self,
+        prediction_log: Tensor,
+        prediction_original: Tensor,
+        target: Tensor,
+        target_original: Tensor,
+        country_gt: Tensor,
+        classification_logits: Tensor,
+        regression_values: Tensor,
+    ) -> Dict[str, Tensor]:
+        """
+        Calculate ALL losses internally, but only weight those in loss_config.
+        Vectorized calculation (no loops) - similar to object detection heads.
+        
+        Args:
+            prediction_log: (B,) - Final prediction in normalized log space
+            prediction_original: (B,) - Final prediction in original scale (USD/m²)
+            target: (B,) - Target in normalized log space
+            target_original: (B,) - Target in original scale (USD/m²)
+            country_gt: (B,) - Ground truth country labels (0 or 1)
+            classification_logits: (B, num_countries) - Classification logits
+            regression_values: (B, num_countries) - Regression values for each class
+        
+        Returns:
+            dict with keys:
+                - 'total': (scalar) - Total weighted loss (for backprop)
+                - 'classification_ce': (scalar) - Classification cross-entropy loss
+                - 'rmsle': (scalar) - RMSLE loss
+                - 'huber': (scalar) - Huber loss
+                - 'mae': (scalar) - MAE loss
+                - 'mse': (scalar) - MSE loss
+                - 'rmse': (scalar) - RMSE loss
+                - 'regression': (scalar) - Regression total loss
+        """
+        loss_dict = {}
+        
+        # Classification loss (always computed for multi-task head)
+        classification_loss = self.cross_entropy(classification_logits, country_gt)
+        loss_dict['classification_ce'] = classification_loss
+        
+        # Regression loss: use regression value for ground truth country (like object detection)
+        # Select regression value for ground truth country (standard object detection)
+        gt_regression = regression_values.gather(1, country_gt.unsqueeze(1)).squeeze(1)  # (B,)
+        
+        # Decode using country-specific normalization
+        # MultiTaskCountryAwareRegression always uses country-specific normalization
+        country_mean = torch.zeros_like(gt_regression)
+        country_std = torch.ones_like(gt_regression)
+        
+        for country_id in self.class_ids:
+            mask = (country_gt == country_id)
+            if mask.any():
+                if country_id not in self.target_mean_by_country:
+                    raise ValueError(
+                        f"Country ID {country_id} found in data but not in target_mean_by_country. "
+                        f"Available class IDs: {self.class_ids}"
+                    )
+                country_mean[mask] = self.target_mean_by_country[country_id]
+                country_std[mask] = self.target_std_by_country[country_id]
+            
+            # Denormalize predictions and targets
+            pred_denorm = gt_regression * country_std + country_mean
+            target_denorm = target * country_std + country_mean
+            
+            # Decode to original scale
+            if self.target_log_transform:
+                pred_original = torch.expm1(torch.clamp(pred_denorm, min=-10.0, max=10.0))
+                target_original_decoded = torch.expm1(torch.clamp(target_denorm, min=-10.0, max=10.0))
+            else:
+                pred_original = pred_denorm
+                target_original_decoded = target_denorm
+        else:
+            # Use overall normalization (gt_regression already in normalized space)
+            pred_original = self.construction_cost_decode(gt_regression, None)
+            target_original_decoded = target_original
+        
+        # Ensure non-negative
+        pred_original = torch.clamp(pred_original, min=0.0)
+        target_original_decoded = torch.clamp(target_original_decoded, min=0.0)
+        
+        # Calculate ALL regression losses (vectorized, no loops)
+        # 1. RMSLE: sqrt(mean((log1p(y_true_orig) - log1p(y_pred_orig))^2))
+        log_pred = torch.log1p(pred_original)
+        log_true = torch.log1p(target_original_decoded)
+        squared_log_error = (log_true - log_pred) ** 2
+        rmsle = torch.sqrt(torch.mean(squared_log_error))
+        loss_dict['rmsle'] = rmsle
+        
+        # 2. Huber loss on original scale
+        huber = self.huber_loss(pred_original, target_original_decoded)
+        loss_dict['huber'] = huber
+        
+        # 3. MAE (L1) loss on original scale
+        mae = torch.mean(torch.abs(pred_original - target_original_decoded))
+        loss_dict['mae'] = mae
+        
+        # 4. MSE (L2) loss on original scale
+        mse = torch.mean((pred_original - target_original_decoded) ** 2)
+        loss_dict['mse'] = mse
+        
+        # Calculate RMSE from MSE (for monitoring)
+        rmse = torch.sqrt(mse)
+        loss_dict['rmse'] = rmse
+        
+        # Calculate regression total loss (only losses in loss_config contribute)
+        regression_total = 0.0
+        for loss_name, weight in self.loss_config.items():
+            if loss_name in loss_dict:
+                regression_total = regression_total + weight * loss_dict[loss_name]
+            else:
+                raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
+        
+        loss_dict['regression'] = regression_total
+        
+        # Total loss: classification + regression
+        # country_classification weight comes from loss_type config
+        total_loss = self.country_classification_weight * classification_loss + regression_total
+        loss_dict['total'] = total_loss
+        
+        return loss_dict
+    
+    def forward(
+        self,
+        x: Tensor,  # (B, N, n_input)
+        target: Optional[Tensor] = None,  # (B,) - Target in normalized log space
+        target_original: Optional[Tensor] = None,  # (B,) - Target in original scale
+        country_gt: Optional[Tensor] = None,  # (B,) - Ground truth country labels (0 or 1)
+    ) -> Dict[str, Tensor]:
+        """
+        Forward pass with multi-task learning (object detection style).
+        
+        Args:
+            x: (B, N, n_input) - Multimodal features
+            target: Optional (B,) - Target in normalized log space
+            target_original: Optional (B,) - Target in original scale (USD/m²)
+            country_gt: Optional (B,) - Ground truth country labels (0 or 1)
+        
+        Returns:
+            dict with keys:
+                - 'prediction_log': (B,) - Final prediction in normalized log space (selected by confidence)
+                - 'prediction_original': (B,) - Final prediction in original scale
+                - 'classification_logits': (B, num_countries) - Class logits
+                - 'classification_probs': (B, num_countries) - Class probabilities
+                - 'regression_values': (B, num_countries) - Regression value for each country
+                - 'confidence_scores': (B, num_countries) - Confidence score for each country
+                - 'selected_country': (B,) - Selected country based on confidence threshold
+                - 'loss_dict': dict - Dictionary of loss components
+        """
+        # Aggregate features (mean pooling)
+        if x.dim() == 3:
+            x_agg = x.mean(dim=1)  # (B, N, n_input) -> (B, n_input)
+        else:
+            x_agg = x  # Already (B, n_input)
+        
+        # Classification branch: predicts class probabilities (like YOLO/DETR)
+        # These probabilities ARE the confidence scores
+        classification_logits = self.classification_head(x_agg)  # (B, num_countries)
+        classification_probs = F.softmax(classification_logits, dim=1)  # (B, num_countries)
+        # Classification probabilities serve as confidence scores
+        confidence_scores = classification_probs  # (B, num_countries)
+        
+        # Regression branch: predicts regression value for each class (like YOLO/DETR)
+        # Each class gets its own regression prediction
+        regression_values = self.regression_head(x_agg)  # (B, num_countries) - one value per class
+        
+        # Select final prediction (standard object detection approach):
+        # Option 1: Weighted sum using classification probabilities (like YOLO)
+        weighted_regression = (classification_probs * regression_values).sum(dim=1)  # (B,)
+        
+        # Option 2: Select by highest confidence (classification probability)
+        selected_country = classification_probs.argmax(dim=1)  # (B,)
+        selected_regression = regression_values.gather(1, selected_country.unsqueeze(1)).squeeze(1)  # (B,)
+        
+        # Use weighted regression as final prediction (standard YOLO approach)
+        pred_log = weighted_regression  # (B,)
+        
+        # Decode prediction (use country_gt during training, selected_country during inference)
+        # MultiTaskCountryAwareRegression always uses country-specific normalization
+        country_for_decode = country_gt if country_gt is not None else selected_country
+        pred_original = self.construction_cost_decode(pred_log, country_for_decode)
+        
+        # Prepare result dict
+        result = {
+            'prediction_log': pred_log,
+            'prediction_original': pred_original,
+            'classification_logits': classification_logits,
+            'classification_probs': classification_probs,
+            'confidence_scores': confidence_scores,  # Same as classification_probs
+            'regression_values': regression_values,  # (B, num_countries) - one value per class
+            'selected_country': selected_country,
+        }
+        
+        # Calculate losses if targets are provided (all losses calculated in calculate_loss)
+        if target is not None and target_original is not None and country_gt is not None:
+            loss_dict = self.calculate_loss(
+                prediction_log=pred_log,
+                prediction_original=pred_original,
+                target=target,
+                target_original=target_original,
+                country_gt=country_gt,
+                classification_logits=classification_logits,
+                regression_values=regression_values,
+            )
+            
+            result['loss_dict'] = loss_dict
+            result['loss'] = loss_dict['total']
+        
+        return result
+
+
 # Registry of available head classes
 HEAD_REGISTRY = {
     'RegressionMLP': RegressionMLP,
@@ -1516,6 +1923,7 @@ HEAD_REGISTRY = {
     'QueryAttentionRegression': QueryAttentionRegression,
     'GatedAttentionPoolingRegression': GatedAttentionPoolingRegression,
     'DualPoolRegression': DualPoolRegression,
+    'MultiTaskCountryAwareRegression': MultiTaskCountryAwareRegression,
     # Add more head classes here in the future
     # 'RegressionTransformer': RegressionTransformer,
     # 'RegressionResNet': RegressionResNet,

@@ -181,9 +181,24 @@ regression_head:
   gate_hidden: 256    # optional, defaults to n_input//2
   loss_type:
     rmsle: 1.0
-  target_mean: 6.513477
-  target_std: 1.101045
+    # country_classification: 1.0  # Uncomment to enable multi-task head (classification + regression)
+                                  # Weight for country classification loss (equal to rmsle for balanced multi-task)
+  
+  # Overall target statistics (used when country-specific stats not provided)
+  target_mean: 6.513477  # Mean of log(1 + target) values (overall)
+  target_std: 1.101045   # Std of log(1 + target) values (overall)
   target_log_transform: true
+  
+  # Country-specific target statistics (if provided, enables country-specific normalization)
+  # Format: {country_id: value} where country_id is 0 or 1
+  # Uncomment to enable country-specific normalization:
+  # target_mean_by_country:
+  #   0: 7.478149  # Mean of log(1 + target) for country 0
+  #   1: 5.304986  # Mean of log(1 + target) for country 1
+  # target_std_by_country:
+  #   0: 0.138897  # Std of log(1 + target) for country 0
+  #   1: 0.283889  # Std of log(1 + target) for country 1
+  
   huber_delta: 1.0
 
 

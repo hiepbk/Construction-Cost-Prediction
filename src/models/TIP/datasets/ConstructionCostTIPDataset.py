@@ -327,6 +327,16 @@ class ConstructionCostTIPDataset(Dataset):
         self.numerical_cols = numerical_cols
         self.num_categorical = len(categorical_cols)
         self.num_numerical = len(numerical_cols)
+        
+        # Extract country labels for multi-task head (if available)
+        # Country is a categorical feature, so after encoding it's 0 or 1
+        if 'country' in self.df.columns:
+            # Country is already encoded in the CSV (0 or 1 after label encoding)
+            # Extract it directly from the CSV
+            self.country_labels = self.df['country'].values.astype(np.int64)
+        else:
+            # Country not available (e.g., test set without country column)
+            self.country_labels = None
     
     def generate_marginal_distributions(self):
         """
@@ -575,7 +585,7 @@ class ConstructionCostTIPDataset(Dataset):
         else:
             return len(self.field_lengths_tabular)
     
-    def __getitem__(self, index: int) -> Tuple[List[torch.Tensor], List[torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], str]:
+    def __getitem__(self, index: int) -> Tuple[List[torch.Tensor], List[torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], str, Optional[torch.Tensor]]:
         """
         Returns:
             imaging_views: [augmented_view1, augmented_view2] - List of (15, H, W) tensors
@@ -584,7 +594,9 @@ class ConstructionCostTIPDataset(Dataset):
             unaugmented_image: Original image without augmentation
             unaugmented_tabular: Original tabular features (for TR loss)
             target: Regression target (construction_cost_per_m2_usd, log-transformed and normalized) or None
+            target_original: Ground truth in original USD/m² scale
             data_id: Unique identifier for this sample (string, NOT used as a feature, only for logging)
+            country: Country label (0 or 1) for multi-task head, or None if not available
         """
         # Generate image views
         imaging_views, unaugmented_image = self.generate_imaging_views(index)
@@ -634,7 +646,13 @@ class ConstructionCostTIPDataset(Dataset):
         else:
             target_original = torch.tensor(0.0, dtype=torch.float32)
         
-        return imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id
+        # Country label (for multi-task head)
+        if self.country_labels is not None:
+            country = torch.tensor(int(self.country_labels[index]), dtype=torch.long)
+        else:
+            country = None
+        
+        return imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country
     
     def __len__(self) -> int:
         return len(self.data_tabular)

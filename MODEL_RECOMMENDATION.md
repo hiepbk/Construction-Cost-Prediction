@@ -310,6 +310,91 @@ We are using **TIP (Tabular-Image Pre-training)**, a self-supervised pretraining
 - **Paper:** https://arxiv.org/abs/2407.07582
 - **ECCV 2024:** Tabular-Image Pre-training for Multimodal Classification with Incomplete Data
 
+---
+
+## Multi-Task Head Architecture (Country-Aware Regression) 🆕
+
+### Problem Statement
+
+The construction cost data shows a **bimodal distribution** driven by **country** (0 and 1). Each country has different target statistics:
+- **Country 0**: mean=7.478149, std=0.138897 (higher cost pattern)
+- **Country 1**: mean=5.304986, std=0.283889 (lower cost pattern)
+
+**Goal**: Build a multi-task head that:
+1. **Classifies** which country the sample belongs to
+2. **Uses country-specific normalization** (target_mean, target_std) for regression
+3. **Calculates regression loss** using the appropriate country's statistics
+
+### Configuration
+
+Added to `config_construction_cost_pretrain.yaml` and `config_construction_cost_finetune.yaml`:
+
+```yaml
+regression_head:
+  # Multi-task head configuration
+  multi_head: false  # If true, use country-aware multi-task head (classification + regression)
+                     # If false, use single head with overall normalization (backward compatible)
+  
+  # Overall target statistics (used when multi_head=false or as fallback)
+  target_mean: 6.513477  # Mean of log(1 + target) values (overall)
+  target_std: 1.101045   # Std of log(1 + target) values (overall)
+  target_log_transform: true
+  
+  # Country-specific target statistics (used when multi_head=true)
+  # Format: {country_id: value} where country_id is 0 or 1
+  target_mean_by_country:
+    0: 7.478149  # Mean of log(1 + target) for country 0
+    1: 5.304986  # Mean of log(1 + target) for country 1
+  target_std_by_country:
+    0: 0.138897  # Std of log(1 + target) for country 0
+    1: 0.283889  # Std of log(1 + target) for country 1
+```
+
+### Recommended Architecture: Parallel Branches
+
+```
+Input: (B, N, n_input) multimodal features from TIP backbone
+  ↓
+Shared Feature Aggregation (Mean Pooling or Attention)
+  ↓ (B, n_input)
+┌─────────────────────┬──────────────────────┐
+│ Country Branch      │ Regression Branch     │
+│ (Classification)    │ (Regression)         │
+│                     │                      │
+│ MLP → (B, 2) logits│ MLP → (B, 1) pred   │
+└─────────────────────┴──────────────────────┘
+  ↓                    ↓
+Country Loss      Regression Loss
+(CrossEntropy)    (RMSLE with country-specific normalization)
+```
+
+**Key Design:**
+- **Shared backbone**: Mean pooling or attention to aggregate (B, N, n_input) → (B, n_input)
+- **Country branch**: MLP → (B, 2) logits for binary classification
+- **Regression branch**: MLP → (B, 1) prediction in log space
+- **Loss calculation**:
+  - Country loss: CrossEntropyLoss
+  - Regression loss: RMSLE using **ground truth country's** target_mean/std (avoids dependency on classification accuracy)
+- **Total loss**: `total_loss = 0.1 * country_loss + 1.0 * regression_loss`
+
+**Implementation Status:**
+- ✅ Config updated with `multi_head` flag and country-specific stats
+- ⏳ Head implementation pending (waiting for user confirmation)
+
+### Preprocessing Updates
+
+The preprocessing script (`src/data/preprocess_construction_cost.py`) now:
+- Calculates country-specific `target_mean` and `target_std` for each country
+- Saves these in metadata as `target_stats_by_country`
+- Prints country-specific stats for config
+- Updated visualization to show country-specific distributions overlaid on overall distribution
+
+**Country Statistics (from validation set):**
+- Country 0: mean=7.478149, std=0.138897, n_samples=114
+- Country 1: mean=5.304986, std=0.283889, n_samples=91
+
+---
+
 ## References
 
 - **TIP (Tabular-Image Pre-training):** [GitHub](https://github.com/siyi-wind/TIP) | [Paper](https://arxiv.org/abs/2407.07582) | ECCV 2024

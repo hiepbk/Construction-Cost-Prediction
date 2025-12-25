@@ -113,7 +113,7 @@ tr_loss: normal  # Tabular reconstruction loss type
 
 # Image Augmentation
 # img_size: 224  # Increased to match SatlasPretrain training size (was 224)
-img_size: 512
+img_size: 224
 augmentation_rate: 0.95
 live_loading: false
 augmentation_speedup: true
@@ -212,17 +212,46 @@ num_classes: 1  # For regression
 
 
 # Example alternatives (commented out — enable one at a time when testing new heads)
+# regression_head:
+#   type: QueryAttentionRegression
+#   p: 0.2
+#   n_hidden: 2048
+#   num_queries: 1      # learnable queries (1–4 typical)
+#   num_heads: 8        # attention heads for query pooling
+#   loss_type:
+#     rmsle: 1.0
+
+#     # Overall target statistics (used when multi_head=false or as fallback)
+#   target_mean: 6.513477  # Mean of log(1 + target) values (overall)
+#   target_std: 1.101045   # Std of log(1 + target) values (overall)
+#   target_log_transform: true
+
+
+
 regression_head:
-  type: QueryAttentionRegression
+  type: MultiTaskCountryAwareRegression
   p: 0.2
   n_hidden: 2048
   num_queries: 1      # learnable queries (1–4 typical)
   num_heads: 8        # attention heads for query pooling
   loss_type:
     rmsle: 1.0
-  target_mean: 6.513477
-  target_std: 1.101045
+    country_classification: 1.0  # Weight for country classification loss (equal to rmsle for balanced multi-task)
+  
+  # Overall target statistics (used when country-specific stats not provided)
+  target_mean: 6.513477  # Mean of log(1 + target) values (overall)
+  target_std: 1.101045   # Std of log(1 + target) values (overall)
   target_log_transform: true
+  
+  # Country-specific target statistics (if provided, enables country-specific normalization)
+  # Format: {country_id: value} where country_id is 0 or 1
+  target_mean_by_country:
+    0: 7.478149  # Mean of log(1 + target) for country 0
+    1: 5.304986  # Mean of log(1 + target) for country 1
+  target_std_by_country:
+    0: 0.138897  # Std of log(1 + target) for country 0
+    1: 0.283889  # Std of log(1 + target) for country 1
+  
   huber_delta: 1.0
 #
 # regression_head:
@@ -232,9 +261,16 @@ regression_head:
 #   gate_hidden: 256    # optional, defaults to n_input//2
 #   loss_type:
 #     rmsle: 1.0
+#   multi_head: false
 #   target_mean: 6.513477
 #   target_std: 1.101045
 #   target_log_transform: true
+#   target_mean_by_country:
+#     0: 7.478149
+#     1: 5.304986
+#   target_std_by_country:
+#     0: 0.138897
+#     1: 0.283889
 #   huber_delta: 1.0
 #
 # regression_head:
@@ -243,9 +279,16 @@ regression_head:
 #   n_hidden: 2048
 #   loss_type:
 #     rmsle: 1.0
+#   multi_head: false
 #   target_mean: 6.513477
 #   target_std: 1.101045
 #   target_log_transform: true
+#   target_mean_by_country:
+#     0: 7.478149
+#     1: 5.304986
+#   target_std_by_country:
+#     0: 0.138897
+#     1: 0.283889
 #   huber_delta: 1.0
 
 eval_metric: rmsle  # Metric to monitor for best checkpoint (rmsle, mae, rmse) - rmsle is primary
