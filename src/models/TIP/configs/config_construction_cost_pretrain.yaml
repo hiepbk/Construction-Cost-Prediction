@@ -241,7 +241,6 @@ regression_head:
   # Overall target statistics (used when country-specific stats not provided)
   target_mean: 6.513477  # Mean of log(1 + target) values (overall)
   target_std: 1.101045   # Std of log(1 + target) values (overall)
-  target_log_transform: true
   
   # Country-specific target statistics (if provided, enables country-specific normalization)
   # Format: {country_id: value} where country_id is 0 or 1

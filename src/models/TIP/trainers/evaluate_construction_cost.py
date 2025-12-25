@@ -98,7 +98,7 @@ def evaluate_validation(
             label = batch[2]
             unaugmented_image = batch[3]
             unaugmented_tabular = batch[4]
-            target = batch[5]  # Log-transformed target (for reference)
+            target_log = batch[5]  # Target in log space (log1p(cost), NOT normalized, from dataloader)
             target_original = batch[6]  # Original scale target (for metrics)
             data_id = batch[7]
             country = batch[8]  # Country labels (not used in evaluation, but present in batch)
@@ -231,7 +231,7 @@ def run_inference(
             label = batch[2]
             unaugmented_image = batch[3]
             unaugmented_tabular = batch[4]
-            target = batch[5]  # Not used for test set
+            target_log = batch[5]  # Not used for test set (may be dummy 0.0)
             target_original = batch[6]  # Not used for test set
             data_id = batch[7]
             country = batch[8]  # Country labels (not used in inference, but present in batch)
@@ -364,8 +364,6 @@ def run_evaluation(args):
     # The head's forward() returns prediction_original which is already in USD/m² scale
     target_mean = None
     target_std = None
-    target_log_transform = None
-    
     # Check if regression_head config exists (new nested format)
     if hasattr(hparams, 'regression_head') and isinstance(hparams.regression_head, (dict, DictConfig)):
         regression_head = hparams.regression_head
@@ -373,12 +371,13 @@ def run_evaluation(args):
             regression_head = OmegaConf.to_container(regression_head, resolve=True)
         target_mean = float(regression_head.get('target_mean', 0.0))
         target_std = float(regression_head.get('target_std', 1.0))
-        target_log_transform = bool(regression_head.get('target_log_transform', True))
     # Fallback to flat hparams (old format)
     elif hasattr(hparams, 'target_mean') and hasattr(hparams, 'target_std'):
         target_mean = float(hparams.target_mean)
         target_std = float(hparams.target_std)
-        target_log_transform = bool(getattr(hparams, 'target_log_transform', True))
+    else:
+        target_mean = None
+        target_std = None
     
     # Display model info
     print(f"Model initialized (from checkpoint):")
@@ -386,7 +385,6 @@ def run_evaluation(args):
     if target_mean is not None and target_std is not None:
         print(f"  Target mean: {target_mean:.4f} (from checkpoint - head uses this internally)")
         print(f"  Target std: {target_std:.4f} (from checkpoint - head uses this internally)")
-        print(f"  Log transform: {target_log_transform}")
     else:
         print(f"  ⚠️  Could not extract target_mean/std from checkpoint (head should still work if loaded correctly)")
     
@@ -404,8 +402,7 @@ def run_evaluation(args):
         is_train=False,  # No augmentation for validation
         corruption_rate=0.0,  # No corruption for evaluation
         augmentation_rate=0.0,  # No augmentation
-        metadata_path=args.val_metadata,
-        target_log_transform=True
+        metadata_path=args.val_metadata
     )
     
     # NOTE: Target normalization is handled internally by the head
@@ -454,8 +451,7 @@ def run_evaluation(args):
         is_train=False,  # No augmentation for test
         corruption_rate=0.0,  # No corruption for inference
         augmentation_rate=0.0,  # No augmentation
-        metadata_path=args.test_metadata,
-        target_log_transform=True
+        metadata_path=args.test_metadata
     )
     test_loader = DataLoader(
         test_dataset,

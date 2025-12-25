@@ -135,7 +135,7 @@ class SSLOnlineEvaluatorRegression(Callback):
         
         Returns:
             x: Image input
-            y: Target (if available) - normalized log-transformed
+            target_log: Target in log space (log1p(cost), NOT normalized, from dataloader)
             x_t: Tabular input (if available)
             y_original: Original target in original scale (if available) - for RMSLE loss
             data_ids: List of data_ids for this batch (if available)
@@ -144,6 +144,7 @@ class SSLOnlineEvaluatorRegression(Callback):
         data_ids = None  # Initialize data_ids
         y_original = None  # Initialize y_original
         country = None  # Initialize country
+        target_log = None  # Initialize target_log
         if self.swav:
             x, y = batch
             x = x[0]
@@ -151,12 +152,13 @@ class SSLOnlineEvaluatorRegression(Callback):
             data_ids = None
             y_original = None
             country = None
+            target_log = None
         elif self.multimodal and self.strategy == 'tip':
-            # TIP multimodal batch: (imaging_views, tabular_views, labels, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)
+            # TIP multimodal batch: (imaging_views, tabular_views, labels, unaugmented_image, unaugmented_tabular, target_log, target_original, data_id, country)
             # Must have exactly 9 elements
             if len(batch) != 9:
-                raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)")
-            x_i, _, contrastive_labels, x_orig, x_t_orig, y, y_original, data_ids, country = batch
+                raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target_log, target_original, data_id, country)")
+            x_i, _, contrastive_labels, x_orig, x_t_orig, target_log, y_original, data_ids, country = batch
             x = x_orig
             x_t = x_t_orig
         elif self.multimodal and self.strategy == 'comparison':
@@ -165,15 +167,19 @@ class SSLOnlineEvaluatorRegression(Callback):
             x_t = None
             data_ids = None
             y_original = None
+            country = None
+            target_log = None
         else:
             _, x, y = batch
             x_t = None
             data_ids = None
             y_original = None
+            country = None
+            target_log = None
         
         x = x.to(device)
-        if y is not None:
-            y = y.to(device)
+        if target_log is not None:
+            target_log = target_log.to(device)
         if x_t is not None:
             x_t = x_t.to(device)
         if y_original is not None:
@@ -182,7 +188,7 @@ class SSLOnlineEvaluatorRegression(Callback):
             country = country.to(device)
         # data_ids is a list of strings, no need to move to device
         
-        return x, y, x_t, y_original, data_ids, country
+        return x, target_log, x_t, y_original, data_ids, country
     
     
     def shared_step(
@@ -197,7 +203,7 @@ class SSLOnlineEvaluatorRegression(Callback):
         """
         with torch.no_grad():
             with set_training(pl_module, False):
-                x, y, x_t, y_original, data_ids, country = self.to_device(batch, pl_module.device)
+                x, target_log, x_t, y_original, data_ids, country = self.to_device(batch, pl_module.device)
                 
                 # Get representations from frozen encoder
                 if x_t is not None:
@@ -220,14 +226,14 @@ class SSLOnlineEvaluatorRegression(Callback):
         if y_original is None:
             raise ValueError("target_original must be in batch. Ensure dataset returns target_original in __getitem__.")
         
-        # Forward pass through regression head with y_original, y (normalized), and country (head handles everything internally)
+        # Forward pass through regression head with target_log, target_original, and country (head handles everything internally)
         # Dynamically build kwargs - only include parameters that have values (not None)
         # This allows the head to handle optional parameters correctly
         head_kwargs = {
             'target_original': y_original.float()  # Original scale target (required)
         }
-        if y is not None:
-            head_kwargs['target'] = y.float()  # Normalized log-transformed target
+        if target_log is not None:
+            head_kwargs['target_log'] = target_log.float()  # Target in log space (log1p(cost), NOT normalized)
         if country is not None:
             head_kwargs['country_gt'] = country  # Country labels for multi-task head
         
@@ -247,8 +253,8 @@ class SSLOnlineEvaluatorRegression(Callback):
         
         # For backward compatibility, also compute targets_normalized if needed
         # (but we don't use it for loss calculation anymore)
-        if y is not None:
-            targets_normalized = y.float()
+        if target_log is not None:
+            targets_normalized = target_log.float()
         else:
             targets_normalized = None
         

@@ -79,7 +79,6 @@ class ConstructionCostTIPDataset(Dataset):
         use_viirs: bool = True,
         live_loading: bool = False,
         augmentation_speedup: bool = True,
-        target_log_transform: bool = True,  # Log-transform target for regression
         metadata_path: str = None,  # Path to metadata.pkl file (from preprocessing)
     ):
         """
@@ -99,7 +98,6 @@ class ConstructionCostTIPDataset(Dataset):
             use_viirs: Whether to use VIIRS imagery
             live_loading: Whether to load images on-the-fly (vs preloaded)
             augmentation_speedup: Use albumentations for faster augmentation
-            target_log_transform: Log-transform target for regression
             metadata_path: Path to metadata.pkl file (from preprocessing). If None, will try to infer from csv_path.
         """
         self.csv_path = csv_path
@@ -110,7 +108,6 @@ class ConstructionCostTIPDataset(Dataset):
         self.use_viirs = use_viirs
         self.live_loading = live_loading
         self.augmentation_speedup = augmentation_speedup
-        self.target_log_transform = target_log_transform
         self.metadata_path = metadata_path
         
         # Validate composite_dir exists and contains files (critical check to avoid silent failures)
@@ -178,13 +175,11 @@ class ConstructionCostTIPDataset(Dataset):
             # Store original targets (before any transformation) for logging
             self.targets_original = self.df['construction_cost_per_m2_usd'].values.copy()
             
-            targets = self.df['construction_cost_per_m2_usd'].values
-            if target_log_transform:
-                # Log-transform: log(1 + cost) to handle zeros and reduce skew
-                targets = np.log1p(targets)
-            self.targets = torch.from_numpy(targets).float()
+            # Always log-transform: log(1 + cost) - this is target_log (real log space, NOT normalized)
+            targets_log = np.log1p(self.df['construction_cost_per_m2_usd'].values)
+            self.targets_log = torch.from_numpy(targets_log).float()
         else:
-            self.targets = None
+            self.targets_log = None
             self.targets_original = None
         
         # Store data_id for each sample (for logging predictions with data_id)
@@ -194,8 +189,8 @@ class ConstructionCostTIPDataset(Dataset):
             self.data_ids = None
         
         assert len(self.data_tabular) == len(self.labels)
-        if self.targets is not None:
-            assert len(self.data_tabular) == len(self.targets)
+        if self.targets_log is not None:
+            assert len(self.data_tabular) == len(self.targets_log)
     
     def _process_tabular_data(self):
         """
@@ -593,7 +588,7 @@ class ConstructionCostTIPDataset(Dataset):
             label: Sample index (for contrastive learning)
             unaugmented_image: Original image without augmentation
             unaugmented_tabular: Original tabular features (for TR loss)
-            target: Regression target (construction_cost_per_m2_usd, log-transformed and normalized) or None
+            target_log: Regression target in log space (log1p(cost), NOT normalized, real log value) or None
             target_original: Ground truth in original USD/m² scale
             data_id: Unique identifier for this sample (string, NOT used as a feature, only for logging)
             country: Country label (0 or 1) for multi-task head, or None if not available
@@ -625,13 +620,13 @@ class ConstructionCostTIPDataset(Dataset):
         # Unaugmented tabular (for TR loss) - convert to tensor
         unaugmented_tabular = torch.tensor(self.data_tabular[index], dtype=torch.float32)
         
-        # Target value (for regression online evaluation)
+        # Target log (log1p(cost), NOT normalized, real log value)
         # Always return a tensor (use dummy value if None to avoid collate issues)
-        if self.targets is not None:
-            target = self.targets[index]
+        if self.targets_log is not None:
+            target_log = self.targets_log[index]
         else:
-            # Return dummy tensor with same dtype as targets would have
-            target = torch.tensor(0.0, dtype=torch.float32)
+            # Return dummy tensor with same dtype as targets_log would have
+            target_log = torch.tensor(0.0, dtype=torch.float32)
         
         # Data ID (for logging predictions with correct identifier)
         # Return as-is (string or list) - will be handled separately in evaluation
@@ -652,7 +647,7 @@ class ConstructionCostTIPDataset(Dataset):
         else:
             country = None
         
-        return imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country
+        return imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target_log, target_original, data_id, country
     
     def __len__(self) -> int:
         return len(self.data_tabular)

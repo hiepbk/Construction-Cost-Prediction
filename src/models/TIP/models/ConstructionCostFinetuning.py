@@ -70,11 +70,9 @@ class ConstructionCostFinetuning(pl.LightningModule):
         if hasattr(self.model.regression, 'target_mean'):
             target_mean = self.model.regression.target_mean
             target_std = self.model.regression.target_std
-            target_log_transform = self.model.regression.target_log_transform
         else:
             target_mean = None
             target_std = None
-            target_log_transform = None
         
         self.best_val_mae = float('inf')
         self.best_val_rmse = float('inf')
@@ -87,7 +85,6 @@ class ConstructionCostFinetuning(pl.LightningModule):
         print(f"Initialized ConstructionCostFinetuning")
         print(f"  Loss config: {loss_config}")
         if target_mean is not None:
-            print(f"  Target log-transform: {target_log_transform}")
             print(f"  Target normalization: mean={target_mean:.2f}, std={target_std:.2f} (from head)")
         else:
             print(f"  ⚠️  Could not get target normalization from head")
@@ -120,23 +117,23 @@ class ConstructionCostFinetuning(pl.LightningModule):
         """
         # Unpack batch from ConstructionCostTIPDataset (always 9 elements with country)
         if len(batch) != 9:
-            raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)")
-        imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country = batch
+            raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target_log, target_original, data_id, country)")
+        imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target_log, target_original, data_id, country = batch
         # Use unaugmented views for fine-tuning
         x = (unaugmented_image, unaugmented_tabular)
-        y = target  # Target is already normalized and log-transformed
-        y_original = target_original  # Ground truth in original scale (USD/m²)
+        target_log = target_log  # Target in log space (log1p(cost), NOT normalized, from dataloader)
+        target_original = target_original  # Ground truth in original scale (USD/m², from dataloader)
         country_gt = country  # Country labels (0 or 1) for multi-task head
         
         # Forward pass through model (returns x_m from backbone)
         x_m = self.model.backbone(x, visualize=False)  # (B, 20, 512)
         
-        # Forward through regression head with y_original and country (head handles everything internally)
+        # Forward through regression head with target_log, target_original and country (head handles everything internally)
         # Pass country_gt for multi-task head (if available)
         head_result = self.model.regression(
             x_m, 
-            target=y if y is not None else None,  # Target in normalized log space
-            target_original=y_original.float() if y_original is not None else None,  # Ground truth in original scale
+            target_log=target_log if target_log is not None else None,  # Target in log space (log1p(cost), NOT normalized)
+            target_original=target_original.float() if target_original is not None else None,  # Ground truth in original scale
             country_gt=country_gt  # Country labels for multi-task head
         )
         
@@ -148,10 +145,10 @@ class ConstructionCostFinetuning(pl.LightningModule):
         
         # Get ground truth in original scale (already provided by dataloader)
         # No need to denormalize - head handles everything internally
-        if y_original is not None:
-            y_true_original = y_original.squeeze()
+        if target_original is not None:
+            y_true_original = target_original.squeeze()
         else:
-            # Fallback: y_original should always be provided by ConstructionCostTIPDataset
+            # Fallback: target_original should always be provided by ConstructionCostTIPDataset
             y_true_original = None
         
         # Log losses from head (already calculated internally) - no need for manual metric calculation
@@ -184,22 +181,22 @@ class ConstructionCostFinetuning(pl.LightningModule):
         """Validation step"""
         # Unpack batch from ConstructionCostTIPDataset (always 9 elements with country)
         if len(batch) != 9:
-            raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)")
-        imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country = batch
+            raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target_log, target_original, data_id, country)")
+        imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target_log, target_original, data_id, country = batch
         # Use unaugmented views for validation
         x = (unaugmented_image, unaugmented_tabular)
-        y = target  # Target is already normalized and log-transformed
-        y_original = target_original  # Ground truth in original scale (USD/m²)
+        target_log = target_log  # Target in log space (log1p(cost), NOT normalized, from dataloader)
+        target_original = target_original  # Ground truth in original scale (USD/m², from dataloader)
         country_gt = country  # Country labels (0 or 1) for multi-task head
         
         # Forward pass through model (returns x_m from backbone)
         x_m = self.model.backbone(x, visualize=False)  # (B, 20, 512)
         
-        # Forward through regression head with y_original and country (head handles everything internally)
+        # Forward through regression head with target_log, target_original and country (head handles everything internally)
         head_result = self.model.regression(
             x_m, 
-            target=y if y is not None else None,  # Target in normalized log space
-            target_original=y_original.float() if y_original is not None else None,  # Ground truth in original scale
+            target_log=target_log if target_log is not None else None,  # Target in log space (log1p(cost), NOT normalized)
+            target_original=target_original.float() if target_original is not None else None,  # Ground truth in original scale
             country_gt=country_gt  # Country labels for multi-task head
         )
         
@@ -228,8 +225,8 @@ class ConstructionCostFinetuning(pl.LightningModule):
                 safe_value = torch.tensor(1000.0, device=y_hat_original.device)  # Default: 1000 USD/m²
             y_hat_original = torch.where(torch.isfinite(y_hat_original), y_hat_original, safe_value)
         
-        # Use y_original directly (already in original scale from dataloader)
-        y_true_original = y_original.squeeze() if y_original is not None else None
+        # Use target_original directly (already in original scale from dataloader)
+        y_true_original = target_original.squeeze() if target_original is not None else None
         
         # Track predictions for WandB logging (like pretraining)
         if data_id is not None:
@@ -340,11 +337,11 @@ class ConstructionCostFinetuning(pl.LightningModule):
         """Test step"""
         # Unpack batch from ConstructionCostTIPDataset (always 9 elements with country)
         if len(batch) != 9:
-            raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)")
-        imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country = batch
+            raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target_log, target_original, data_id, country)")
+        imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target_log, target_original, data_id, country = batch
         # Use unaugmented views for testing
         x = (unaugmented_image, unaugmented_tabular)
-        y = target  # Target is already normalized and log-transformed (may be dummy 0.0 for test set)
+        target_log = target_log  # Target in log space (log1p(cost), NOT normalized, may be dummy 0.0 for test set)
         country_gt = country  # Country labels (for multi-task head)
         
         # Forward pass through model (returns x_m from backbone)
@@ -357,13 +354,13 @@ class ConstructionCostFinetuning(pl.LightningModule):
         y_hat = head_result['prediction_log']  # (B,) - normalized log space
         y_hat_original = head_result['prediction_original']  # (B,) - original scale
         
-        # Metrics (in log space) - only if target is valid (not dummy)
-        if y is not None and not (isinstance(y, torch.Tensor) and (y == 0.0).all()):
+        # Metrics (in log space) - only if target_log is valid (not dummy)
+        if target_log is not None and not (isinstance(target_log, torch.Tensor) and (target_log == 0.0).all()):
             y_hat_detached = y_hat.detach().squeeze()
-            y_detached = y.squeeze()
+            target_log_detached = target_log.squeeze()
             
-            self.mae_test(y_hat_detached, y_detached)
-            self.rmse_test(y_hat_detached, y_detached)
+            self.mae_test(y_hat_detached, target_log_detached)
+            self.rmse_test(y_hat_detached, target_log_detached)
     
     def test_epoch_end(self, _) -> None:
         """Compute test metrics"""

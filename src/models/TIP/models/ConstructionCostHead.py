@@ -1548,7 +1548,6 @@ class MultiTaskCountryAwareRegression(nn.Module):
         target_std: float - Overall std (used when country-specific stats not provided)
         target_mean_by_country: Optional[Dict[int, float]] - Country-specific means {0: mean0, 1: mean1}
         target_std_by_country: Optional[Dict[int, float]] - Country-specific stds {0: std0, 1: std1}
-        target_log_transform: bool - Whether target is log-transformed (default: True)
         huber_delta: float - Delta parameter for Huber loss (default: 1.0)
     """
     def __init__(
@@ -1564,7 +1563,6 @@ class MultiTaskCountryAwareRegression(nn.Module):
         target_std: float = 1.0,
         target_mean_by_country: Optional[Dict[int, float]] = None,
         target_std_by_country: Optional[Dict[int, float]] = None,
-        target_log_transform: bool = True,
         huber_delta: float = 1.0,
     ):
         super().__init__()
@@ -1575,7 +1573,6 @@ class MultiTaskCountryAwareRegression(nn.Module):
         # Store configuration
         self.num_countries = num_countries
         self.confidence_threshold = confidence_threshold
-        self.target_log_transform = target_log_transform
         self.huber_delta = huber_delta
         
         # Ensure num_heads divides n_input (like AttentionAggregationRegression)
@@ -1719,11 +1716,8 @@ class MultiTaskCountryAwareRegression(nn.Module):
         # Denormalize (vectorized)
         pred_log = prediction_log * country_std + country_mean
         
-        # Reverse log-transform to get original scale
-        if self.target_log_transform:
-            pred_original = torch.expm1(torch.clamp(pred_log, min=-10.0, max=10.0))
-        else:
-            pred_original = pred_log
+        # Reverse log-transform to get original scale (target_log is always log-transformed from dataloader)
+        pred_original = torch.expm1(torch.clamp(pred_log, min=-10.0, max=10.0))
         
         # Ensure non-negative
         pred_original = torch.clamp(pred_original, min=0.0)
@@ -1733,7 +1727,7 @@ class MultiTaskCountryAwareRegression(nn.Module):
         self,
         prediction_log: Tensor,
         prediction_original: Tensor,
-        target: Tensor,
+        target_log: Tensor,
         target_original: Tensor,
         country_gt: Tensor,
         classification_logits: Tensor,
@@ -1746,8 +1740,8 @@ class MultiTaskCountryAwareRegression(nn.Module):
         Args:
             prediction_log: (B,) - Final prediction in normalized log space
             prediction_original: (B,) - Final prediction in original scale (USD/m²)
-            target: (B,) - Target in normalized log space
-            target_original: (B,) - Target in original scale (USD/m²)
+            target_log: (B,) - Target in log space (log1p(cost), NOT normalized, from dataloader)
+            target_original: (B,) - Target in original scale (USD/m², from dataloader)
             country_gt: (B,) - Ground truth country labels (0 or 1)
             classification_logits: (B, num_countries) - Classification logits
             regression_values: (B, num_countries) - Regression values for each class
@@ -1790,42 +1784,36 @@ class MultiTaskCountryAwareRegression(nn.Module):
                 country_mean[mask] = self.target_mean_by_country[country_id]
                 country_std[mask] = self.target_std_by_country[country_id]
         
-        # Denormalize predictions (after setting all country-specific stats)
-        # gt_regression is in normalized log space, decode it using country-specific normalization
-        pred_denorm = gt_regression * country_std + country_mean
+        # Denormalize prediction (gt_regression is in normalized log space)
+        pred_log_denorm = gt_regression * country_std + country_mean  # (B,) - denormalized log space
         
-        # Decode prediction to original scale
-        if self.target_log_transform:
-            pred_original = torch.expm1(torch.clamp(pred_denorm, min=-10.0, max=10.0))
-        else:
-            pred_original = pred_denorm
+        # target_log is already in log space (log1p(cost), NOT normalized) - use directly!
+        # No conversion needed - dataset already prepared it
         
-        # target_original is already in original scale from dataloader - use it directly!
-        # Do NOT decode it again - it's already the ground truth in USD/m²
-        
-        # Ensure non-negative
-        pred_original = torch.clamp(pred_original, min=0.0)
-        target_original = torch.clamp(target_original, min=0.0)
-        
-        # Calculate ALL regression losses (vectorized, no loops)
+        # Calculate losses in log space (consistent with RMSLE)
+        # Use pred_log_denorm and target_log directly (both in log space)
         # 1. RMSLE: sqrt(mean((log1p(y_true_orig) - log1p(y_pred_orig))^2))
-        log_pred = torch.log1p(pred_original)
-        log_true = torch.log1p(target_original)
-        squared_log_error = (log_true - log_pred) ** 2
+        # Since target_log = log1p(target_original) and pred_log_denorm = log1p(pred_original) after denormalize,
+        # we can use them directly
+        squared_log_error = (target_log - pred_log_denorm) ** 2
         rmsle = torch.sqrt(torch.mean(squared_log_error))
         loss_dict['rmsle'] = rmsle
         
-        # 2. Huber loss on original scale
-        huber = self.huber_loss(pred_original, target_original)
+        # 2. Huber loss in log space
+        huber = self.huber_loss(pred_log_denorm, target_log)
         loss_dict['huber'] = huber
         
-        # 3. MAE (L1) loss on original scale
-        mae = torch.mean(torch.abs(pred_original - target_original))
+        # 3. MAE (L1) loss in log space
+        mae = torch.mean(torch.abs(target_log - pred_log_denorm))
         loss_dict['mae'] = mae
         
-        # 4. MSE (L2) loss on original scale
-        mse = torch.mean((pred_original - target_original) ** 2)
+        # 4. MSE (L2) loss in log space
+        mse = torch.mean((target_log - pred_log_denorm) ** 2)
         loss_dict['mse'] = mse
+        
+        # Also decode to original scale for prediction_original (needed for return value)
+        pred_original = torch.expm1(torch.clamp(pred_log_denorm, min=-10.0, max=10.0))
+        pred_original = torch.clamp(pred_original, min=0.0)
         
         # Calculate RMSE from MSE (for monitoring)
         rmse = torch.sqrt(mse)
@@ -1851,8 +1839,8 @@ class MultiTaskCountryAwareRegression(nn.Module):
     def forward(
         self,
         x: Tensor,  # (B, N, n_input)
-        target: Optional[Tensor] = None,  # (B,) - Target in normalized log space
-        target_original: Optional[Tensor] = None,  # (B,) - Target in original scale
+        target_log: Optional[Tensor] = None,  # (B,) - Target in log space (log1p(cost), NOT normalized, from dataloader)
+        target_original: Optional[Tensor] = None,  # (B,) - Target in original scale (USD/m², from dataloader)
         country_gt: Optional[Tensor] = None,  # (B,) - Ground truth country labels (0 or 1)
     ) -> Dict[str, Tensor]:
         """
@@ -1860,8 +1848,8 @@ class MultiTaskCountryAwareRegression(nn.Module):
         
         Args:
             x: (B, N, n_input) - Multimodal features
-            target: Optional (B,) - Target in normalized log space
-            target_original: Optional (B,) - Target in original scale (USD/m²)
+            target_log: Optional (B,) - Target in log space (log1p(cost), NOT normalized, from dataloader)
+            target_original: Optional (B,) - Target in original scale (USD/m², from dataloader)
             country_gt: Optional (B,) - Ground truth country labels (0 or 1)
         
         Returns:
@@ -1928,11 +1916,11 @@ class MultiTaskCountryAwareRegression(nn.Module):
         }
         
         # Calculate losses if targets are provided (all losses calculated in calculate_loss)
-        if target is not None and target_original is not None and country_gt is not None:
+        if target_log is not None and target_original is not None and country_gt is not None:
             loss_dict = self.calculate_loss(
                 prediction_log=pred_log,
                 prediction_original=pred_original,
-                target=target,
+                target_log=target_log,
                 target_original=target_original,
                 country_gt=country_gt,
                 classification_logits=classification_logits,

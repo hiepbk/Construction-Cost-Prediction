@@ -138,7 +138,6 @@ def load_datasets(hparams, fold_index=None):
     use_viirs=hparams.use_viirs,
     live_loading=hparams.live_loading,
     augmentation_speedup=hparams.augmentation_speedup,
-    target_log_transform=getattr(hparams, 'target_log_transform', True),
     metadata_path=train_metadata_path
   )
   val_dataset = ConstructionCostTIPDataset(
@@ -157,7 +156,6 @@ def load_datasets(hparams, fold_index=None):
     use_viirs=hparams.use_viirs,
     live_loading=hparams.live_loading,
     augmentation_speedup=hparams.augmentation_speedup,
-    target_log_transform=getattr(hparams, 'target_log_transform', True),
     metadata_path=val_metadata_path
   )
   with open_dict(hparams):
@@ -309,8 +307,6 @@ def _pretrain_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
         hparams.target_mean = 0.0
       if not hasattr(hparams, 'target_std'):
         hparams.target_std = 1.0
-      if not hasattr(hparams, 'target_log_transform'):
-        hparams.target_log_transform = True
   
   model = select_model(hparams, train_dataset)
   

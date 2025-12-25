@@ -220,7 +220,6 @@ def load_datasets(hparams, fold_index=None):
         use_viirs=hparams.use_viirs,
         live_loading=hparams.live_loading,
         augmentation_speedup=hparams.augmentation_speedup,
-        target_log_transform=getattr(hparams, 'target_log_transform', True),
         metadata_path=train_metadata_path
     )
     val_dataset = ConstructionCostTIPDataset(
@@ -239,7 +238,6 @@ def load_datasets(hparams, fold_index=None):
         use_viirs=hparams.use_viirs,
         live_loading=hparams.live_loading,
         augmentation_speedup=hparams.augmentation_speedup,
-        target_log_transform=getattr(hparams, 'target_log_transform', True),
         metadata_path=val_metadata_path
     )
     with open_dict(hparams):
