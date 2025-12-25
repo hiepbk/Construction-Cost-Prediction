@@ -9,7 +9,7 @@ from omegaconf import open_dict, DictConfig, OmegaConf
 import os
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import KFold
+from sklearn.model_selection import StratifiedKFold
 
 from utils.utils import create_logdir
 from utils.ssl_online_custom import SSLOnlineEvaluator
@@ -66,18 +66,45 @@ def load_datasets(hparams, fold_index=None):
     
     print(f"K-Fold parameters: k={k_fold}, seed={k_fold_seed}, current_fold={fold_index}")
     
-    # Create k-fold splitter
-    kf = KFold(n_splits=k_fold, shuffle=True, random_state=k_fold_seed)
+    # Stratify by country for balanced distribution
+    stratify_col = 'country'
+    if stratify_col not in df_trainval.columns:
+      raise ValueError(f"Stratify column '{stratify_col}' not found in CSV. Cannot perform balanced split.")
     
-    # Get indices for current fold
+    stratify_labels = df_trainval[stratify_col].values
+    print(f"✅ Stratifying by: {stratify_col}")
+    print(f"   Original distribution:")
+    orig_dist = df_trainval[stratify_col].value_counts().sort_index()
+    for val, count in orig_dist.items():
+      pct = count / len(df_trainval) * 100
+      print(f"     {stratify_col}={val}: {count} samples ({pct:.2f}%)")
+    
+    # Create stratified k-fold splitter
+    skf = StratifiedKFold(n_splits=k_fold, shuffle=True, random_state=k_fold_seed)
+    
+    # Get indices for current fold (stratified by country)
     indices = np.arange(len(df_trainval))
-    train_indices, val_indices = list(kf.split(indices))[fold_index]
+    train_indices, val_indices = list(skf.split(indices, stratify_labels))[fold_index]
     
     # Split dataframe
     df_train = df_trainval.iloc[train_indices].reset_index(drop=True)
     df_val = df_trainval.iloc[val_indices].reset_index(drop=True)
     
-    print(f"Fold {fold_index}: Train={len(df_train)} samples, Val={len(df_val)} samples")
+    print(f"\nFold {fold_index}: Train={len(df_train)} samples, Val={len(df_val)} samples")
+    
+    # Verify balanced distribution
+    print(f"\nDistribution verification:")
+    print(f"Train - {stratify_col} distribution:")
+    train_dist = df_train[stratify_col].value_counts().sort_index()
+    for val, count in train_dist.items():
+      pct = count / len(df_train) * 100
+      print(f"  {stratify_col}={val}: {count} samples ({pct:.2f}%)")
+    
+    print(f"Val - {stratify_col} distribution:")
+    val_dist = df_val[stratify_col].value_counts().sort_index()
+    for val, count in val_dist.items():
+      pct = count / len(df_val) * 100
+      print(f"  {stratify_col}={val}: {count} samples ({pct:.2f}%)")
     
     # Use trainval metadata (same for both train and val since they come from same source)
     trainval_metadata = getattr(hparams, 'trainval_metadata_path', None)

@@ -246,10 +246,15 @@ pip install -r requirements.txt
 ### Preprocessing
 
 Before training, you need to preprocess the tabular data. This script:
+- **Splits trainval into train/val (80/20)**: Uses stratified split by `country` to maintain balanced distribution
 - **Preprocesses entire trainval set** (creates `trainval/trainval_clean.csv` for k-fold cross-validation)
-- Splits trainval into train/val sets
-- Processes categorical and numerical features
+- Processes categorical and numerical features:
+  - Handles missing values (mode for categorical, median for numerical)
+  - Normalizes continuous features (z-score)
+  - Encodes categorical features (label encoding)
+  - Handles high-cardinality categoricals
 - Generates metadata for consistent feature mapping
+- **Creates data analysis visualizations**: Automatically generates 5 analysis plots in `data_analysis/` folder
 - **Prints target normalization stats** that you must add to your config file
 - Optionally checks if image files exist on disk
 
@@ -272,17 +277,34 @@ python src/data/preprocess_construction_cost.py \
     --check_files
 ```
 
+**What the preprocessing script does:**
+1. **Splits trainval into train/val (80/20)**: Uses stratified split by `country` to maintain balanced distribution
+2. **Preprocesses tabular data**:
+   - Handles missing values (mode for categorical, median for numerical)
+   - Normalizes continuous features (z-score)
+   - Encodes categorical features (label encoding)
+   - Handles high-cardinality categoricals
+3. **Creates unified trainval set**: For k-fold cross-validation
+4. **Generates data analysis plots**: Automatically creates visualization plots in `data_analysis/` folder:
+   - Target distribution (original & log scale, by country, train vs val)
+   - Country distribution (overall, train, val)
+   - Key feature distributions
+   - Target statistics summary
+   - Dataset split summary
+
 **Important:** After running preprocessing, the script will print target normalization statistics like:
 ```
-target_mean: 7.123456  # Mean of log(1 + target) values
-target_std: 0.789012   # Std of log(1 + target) values
+
+target_mean: 6.513477  # Mean of log(1 + target) values
+target_std: 1.101045   # Std of log(1 + target) values
 target_log_transform: true
 ```
 
 **You must copy these values to your config file** (`src/models/TIP/configs/config_construction_cost_pretrain.yaml`):
 ```yaml
-target_mean: 7.123456  # Replace with value from preprocessing output
-target_std: 0.789012   # Replace with value from preprocessing output
+
+target_mean: 6.513477  # Mean of log(1 + target) values
+target_std: 1.101045   # Std of log(1 + target) values
 target_log_transform: true
 ```
 
@@ -313,9 +335,18 @@ python src/data/preprocess_construction_cost.py \
 - `data/annotation/train/train_clean_metadata.pkl` - Training metadata
 - `data/annotation/val/val_clean.csv` - Processed validation data
 - `data/annotation/val/val_clean_metadata.pkl` - Validation metadata
+- `data/annotation/trainval/trainval_clean.csv` - Processed trainval data (for k-fold CV)
+- `data/annotation/trainval/trainval_clean_metadata.pkl` - Trainval metadata
 - `data/annotation/test/test_clean.csv` - Processed test data
 - `data/annotation/test/test_clean_metadata.pkl` - Test metadata
 - `data/annotation/field_lengths.pt` - Field lengths for TIP encoder
+- `data/annotation/label_encoders.pkl` - Label encoders for categorical features
+- `data/annotation/normalization_stats.pkl` - Normalization statistics for numerical features
+- `data_analysis/01_target_distribution.png` - Target variable distribution analysis
+- `data_analysis/02_country_distribution.png` - Country distribution (balanced split verification)
+- `data_analysis/03_feature_distributions.png` - Key feature distributions
+- `data_analysis/04_target_statistics.png` - Target statistics summary table
+- `data_analysis/05_dataset_split_summary.png` - Dataset split summary table
 
 ### Training
 

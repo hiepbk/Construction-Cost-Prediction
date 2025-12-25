@@ -77,7 +77,8 @@ embedding_dim: 2048
 projection_dim: 128
 
 # Training
-batch_size: 32
+# batch_size: 32
+batch_size: 8
 lr: 3e-4
 weight_decay: 1e-5
 lr_finetune: 1e-3  # For fine-tuning stage
@@ -111,7 +112,8 @@ view: augmented  # View type for contrastive learning
 tr_loss: normal  # Tabular reconstruction loss type
 
 # Image Augmentation
-img_size: 224  # Increased to match SatlasPretrain training size (was 224)
+# img_size: 224  # Increased to match SatlasPretrain training size (was 224)
+img_size: 512
 augmentation_rate: 0.95
 live_loading: false
 augmentation_speedup: true
@@ -210,30 +212,30 @@ num_classes: 1  # For regression
 
 
 # Example alternatives (commented out — enable one at a time when testing new heads)
-# regression_head:
-#   type: QueryAttentionRegression
-#   p: 0.2
-#   n_hidden: 2048
-#   num_queries: 1      # learnable queries (1–4 typical)
-#   num_heads: 8        # attention heads for query pooling
-#   loss_type:
-#     rmsle: 1.0
-#   target_mean: 6.513477
-#   target_std: 1.101045
-#   target_log_transform: true
-#   huber_delta: 1.0
-#
 regression_head:
-  type: GatedAttentionPoolingRegression
+  type: QueryAttentionRegression
   p: 0.2
   n_hidden: 2048
-  gate_hidden: 256    # optional, defaults to n_input//2
+  num_queries: 1      # learnable queries (1–4 typical)
+  num_heads: 8        # attention heads for query pooling
   loss_type:
     rmsle: 1.0
   target_mean: 6.513477
   target_std: 1.101045
   target_log_transform: true
   huber_delta: 1.0
+#
+# regression_head:
+#   type: GatedAttentionPoolingRegression
+#   p: 0.2
+#   n_hidden: 2048
+#   gate_hidden: 256    # optional, defaults to n_input//2
+#   loss_type:
+#     rmsle: 1.0
+#   target_mean: 6.513477
+#   target_std: 1.101045
+#   target_log_transform: true
+#   huber_delta: 1.0
 #
 # regression_head:
 #   type: DualPoolRegression
