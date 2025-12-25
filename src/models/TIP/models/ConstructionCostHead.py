@@ -1778,6 +1778,7 @@ class MultiTaskCountryAwareRegression(nn.Module):
         country_mean = torch.zeros_like(gt_regression)
         country_std = torch.ones_like(gt_regression)
         
+        # Set country-specific mean and std for each sample based on country_gt
         for country_id in self.class_ids:
             mask = (country_gt == country_id)
             if mask.any():
@@ -1788,22 +1789,18 @@ class MultiTaskCountryAwareRegression(nn.Module):
                     )
                 country_mean[mask] = self.target_mean_by_country[country_id]
                 country_std[mask] = self.target_std_by_country[country_id]
-            
-            # Denormalize predictions and targets
-            pred_denorm = gt_regression * country_std + country_mean
-            target_denorm = target * country_std + country_mean
-            
-            # Decode to original scale
-            if self.target_log_transform:
-                pred_original = torch.expm1(torch.clamp(pred_denorm, min=-10.0, max=10.0))
-                target_original_decoded = torch.expm1(torch.clamp(target_denorm, min=-10.0, max=10.0))
-            else:
-                pred_original = pred_denorm
-                target_original_decoded = target_denorm
+        
+        # Denormalize predictions and targets (after setting all country-specific stats)
+        pred_denorm = gt_regression * country_std + country_mean
+        target_denorm = target * country_std + country_mean
+        
+        # Decode to original scale
+        if self.target_log_transform:
+            pred_original = torch.expm1(torch.clamp(pred_denorm, min=-10.0, max=10.0))
+            target_original_decoded = torch.expm1(torch.clamp(target_denorm, min=-10.0, max=10.0))
         else:
-            # Use overall normalization (gt_regression already in normalized space)
-            pred_original = self.construction_cost_decode(gt_regression, None)
-            target_original_decoded = target_original
+            pred_original = pred_denorm
+            target_original_decoded = target_denorm
         
         # Ensure non-negative
         pred_original = torch.clamp(pred_original, min=0.0)

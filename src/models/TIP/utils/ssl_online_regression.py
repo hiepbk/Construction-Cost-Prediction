@@ -4,6 +4,7 @@ Evaluates pretrained representations by training a regression head on frozen fea
 '''
 from contextlib import contextmanager
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
+import inspect
 
 import torch
 from pytorch_lightning import Callback, LightningModule, Trainer
@@ -219,16 +220,16 @@ class SSLOnlineEvaluatorRegression(Callback):
         if y_original is None:
             raise ValueError("target_original must be in batch. Ensure dataset returns target_original in __getitem__.")
         
-        # Forward pass through regression head with y_original and country (head handles everything internally)
-        # Pass country if available (needed for MultiTaskCountryAwareRegression head)
-        import inspect
-        sig = inspect.signature(self.online_evaluator.forward)
+        # Forward pass through regression head with y_original, y (normalized), and country (head handles everything internally)
+        # Dynamically build kwargs - only include parameters that have values (not None)
+        # This allows the head to handle optional parameters correctly
         head_kwargs = {
-            'target_original': y_original.float()  # Pass y_original directly, head handles everything
+            'target_original': y_original.float()  # Original scale target (required)
         }
-        # Only pass country_gt if the head's forward method accepts it
-        if country is not None and 'country_gt' in sig.parameters:
-            head_kwargs['country_gt'] = country  # Pass country for multi-task head
+        if y is not None:
+            head_kwargs['target'] = y.float()  # Normalized log-transformed target
+        if country is not None:
+            head_kwargs['country_gt'] = country  # Country labels for multi-task head
         
         head_result = self.online_evaluator(
             representations,
