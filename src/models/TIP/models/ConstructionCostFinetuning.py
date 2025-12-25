@@ -240,13 +240,12 @@ class ConstructionCostFinetuning(pl.LightningModule):
                 self.tracked_val_targets[str(did)] = float(y_true_original[idx].cpu().detach())
                 
                 # Track classification predictions (if multi-task head)
-                # Apply threshold 0.5 to get binary prediction (0 or 1), not probabilities
+                # Use selected_country (from argmax) which is already binary (0 or 1)
                 if 'classification_ce' in loss_dict and country_gt is not None:
-                    classification_probs = head_result.get('classification_probs', None)
-                    if classification_probs is not None and idx < len(classification_probs):
-                        # Apply threshold 0.5 to get binary prediction (0 or 1)
-                        prob = classification_probs[idx, 1].cpu().detach()  # Probability of class 1
-                        pred_class = 1 if prob > 0.5 else 0
+                    selected_country = head_result.get('selected_country', None)
+                    if selected_country is not None and idx < len(selected_country):
+                        # selected_country is already binary (0 or 1) from argmax
+                        pred_class = int(selected_country[idx].cpu().detach())
                         self.tracked_val_classification_preds[str(did)] = pred_class
                         self.tracked_val_classification_targets[str(did)] = int(country_gt[idx].cpu().detach())
         

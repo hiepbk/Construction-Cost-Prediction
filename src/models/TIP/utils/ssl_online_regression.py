@@ -369,13 +369,12 @@ class SSLOnlineEvaluatorRegression(Callback):
                     self.tracked_val_targets[data_id] = float(targets_denorm[local_idx].cpu().detach())
                     
                     # Track classification predictions (if multi-task head)
-                    # Apply threshold 0.5 to get binary prediction (0 or 1), not probabilities
+                    # Use selected_country (from argmax) which is already binary (0 or 1)
                     if 'classification_ce' in loss_dict and country is not None:
-                        classification_probs = head_result.get('classification_probs', None)
-                        if classification_probs is not None and local_idx < len(classification_probs):
-                            # Apply threshold 0.5 to get binary prediction (0 or 1)
-                            prob = classification_probs[local_idx, 1].cpu().detach()  # Probability of class 1
-                            pred_class = 1 if prob > 0.5 else 0
+                        selected_country = head_result.get('selected_country', None)
+                        if selected_country is not None and local_idx < len(selected_country):
+                            # selected_country is already binary (0 or 1) from argmax
+                            pred_class = int(selected_country[local_idx].cpu().detach())
                             self.tracked_val_classification_preds[data_id] = pred_class
                             self.tracked_val_classification_targets[data_id] = int(country[local_idx].cpu().detach())
         

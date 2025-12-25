@@ -2048,14 +2048,15 @@ class MultiTaskCountryAwareRegression(nn.Module):
         
         # Select final prediction (standard object detection approach):
         # Option 1: Weighted sum using classification probabilities (like YOLO)
-        weighted_regression = (classification_probs * regression_values).sum(dim=1)  # (B,)
+        # Commented out - will try later if selected_country approach is bad
+        # weighted_regression = (classification_probs * regression_values).sum(dim=1)  # (B,)
         
         # Option 2: Select by highest confidence (classification probability)
         selected_country = classification_probs.argmax(dim=1)  # (B,)
         selected_regression = regression_values.gather(1, selected_country.unsqueeze(1)).squeeze(1)  # (B,)
         
-        # Use weighted regression as final prediction (standard YOLO approach)
-        pred_log = weighted_regression  # (B,)
+        # Use selected regression as final prediction (Option 2)
+        pred_log = selected_regression  # (B,)
         
         # Decode prediction (use country_gt during training, selected_country during inference)
         # MultiTaskCountryAwareRegression always uses country-specific normalization
