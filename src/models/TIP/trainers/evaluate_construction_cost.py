@@ -12,6 +12,7 @@ import argparse
 import pickle
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 import numpy as np
 import pandas as pd
 from torch.utils.data import DataLoader
@@ -61,6 +62,58 @@ def compute_rmsle(y_true: torch.Tensor, y_pred: torch.Tensor) -> float:
     return rmsle
 
 
+def _gather_tensors(tensor_list, world_size):
+    """
+    Gather tensors from all GPUs and concatenate them.
+    
+    Args:
+        tensor_list: List of tensors from current GPU
+        world_size: Number of GPUs
+    
+    Returns:
+        Concatenated tensor from all GPUs (on rank 0), or original tensor if single GPU
+    """
+    if world_size == 1:
+        return tensor_list
+    
+    # Gather all tensors from all GPUs
+    gathered_list = [None] * world_size
+    dist.all_gather_object(gathered_list, tensor_list)
+    
+    # Concatenate all gathered tensors
+    all_tensors = []
+    for gpu_tensors in gathered_list:
+        all_tensors.extend(gpu_tensors)
+    
+    return all_tensors
+
+
+def _gather_lists(list_data, world_size):
+    """
+    Gather lists (like data_ids) from all GPUs and concatenate them.
+    
+    Args:
+        list_data: List from current GPU
+        world_size: Number of GPUs
+    
+    Returns:
+        Concatenated list from all GPUs (on rank 0), or original list if single GPU
+    """
+    if world_size == 1:
+        return list_data
+    
+    # Gather all lists from all GPUs
+    gathered_list = [None] * world_size
+    dist.all_gather_object(gathered_list, list_data)
+    
+    # Concatenate all gathered lists
+    all_lists = []
+    for gpu_list in gathered_list:
+        all_lists.extend(gpu_list)
+    
+    return all_lists
+
+
 def evaluate_validation(
     model: ConstructionCostPrediction,
     val_loader: DataLoader,
@@ -72,23 +125,33 @@ def evaluate_validation(
     """
     Evaluate model on validation set.
     
+    Supports multi-GPU evaluation by gathering predictions from all GPUs.
+    Only rank 0 saves results to avoid duplicate files.
+    
     Returns:
         Dictionary with metrics: {'rmsle': float, 'mae': float, 'rmse': float, 'r2': float}
     """
     model.eval()
     
+    # Check if running in distributed mode
+    is_distributed = dist.is_initialized() if hasattr(dist, 'is_initialized') else False
+    world_size = dist.get_world_size() if is_distributed else 1
+    rank = dist.get_rank() if is_distributed else 0
+    
     all_predictions = []
     all_targets = []
     all_data_ids = []
     
-    # Calculate total batches for progress
+    # Calculate total batches for progress (only print from rank 0)
     total_batches = len(val_loader)
-    print(f"Total batches: {total_batches}")
+    if rank == 0:
+        print(f"Total batches: {total_batches}")
     with torch.no_grad():
         for batch_idx, batch in enumerate(val_loader):
-            # Print progress for every batch (single line, updates in place)
-            progress_pct = 100 * (batch_idx + 1) / total_batches
-            print(f"\r  Validation: {batch_idx + 1}/{total_batches} batches ({progress_pct:.1f}%)", end='', flush=True)
+            # Print progress for every batch (single line, updates in place) - only from rank 0
+            if rank == 0:
+                progress_pct = 100 * (batch_idx + 1) / total_batches
+                print(f"\r  Validation: {batch_idx + 1}/{total_batches} batches ({progress_pct:.1f}%)", end='', flush=True)
             
             # Unpack batch: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)
             if len(batch) != 9:
@@ -134,10 +197,16 @@ def evaluate_validation(
             if data_id is not None:
                 all_data_ids.extend(data_id)
     
-    # Concatenate all predictions
+    # Gather predictions from all GPUs if running in distributed mode
+    if is_distributed:
+        all_predictions = _gather_tensors(all_predictions, world_size)
+        all_targets = _gather_tensors(all_targets, world_size) if all_targets else []
+        all_data_ids = _gather_lists(all_data_ids, world_size) if all_data_ids else []
+    
+    # Concatenate all predictions (now from all GPUs if distributed)
     all_predictions = torch.cat(all_predictions, dim=0)
     
-    # Compute metrics if targets are available
+    # Compute metrics if targets are available (only on rank 0 to avoid duplicate computation)
     metrics = {}
     if all_targets:
         all_targets = torch.cat(all_targets, dim=0)
@@ -159,34 +228,36 @@ def evaluate_validation(
         metrics['rmse'] = rmse
         metrics['r2'] = r2
         
-        print("\n" + "="*60)
-        print("VALIDATION METRICS")
-        print("="*60)
-        print(f"RMSLE: {rmsle:.6f}")
-        print(f"MAE:   {mae:.2f} USD/m²")
-        print(f"RMSE:  {rmse:.2f} USD/m²")
-        print(f"R²:    {r2:.6f}")
-        print("="*60 + "\n")
-        
-        # Save predictions if requested
-        if save_predictions and output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-            pred_df = pd.DataFrame({
-                'data_id': all_data_ids if all_data_ids else [f'sample_{i}' for i in range(len(all_predictions))],
-                'construction_cost_per_m2_usd': all_predictions.numpy(),  # Prediction (for submission format)
-                'ground_truth': all_targets.numpy(),  # Ground truth (additional column)
-                'error': (all_predictions - all_targets).numpy(),
-                'abs_error': torch.abs(all_predictions - all_targets).numpy()
-            })
-            # Generate filename with checkpoint name and timestamp
-            if checkpoint_path:
-                checkpoint_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
-            else:
-                checkpoint_name = 'unknown'
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            pred_path = os.path.join(output_dir, f'val_predictions_{checkpoint_name}_{timestamp}.csv')
-            pred_df.to_csv(pred_path, index=False)
-            print(f"Saved validation predictions to: {pred_path}")
+        # Only print and save from rank 0 to avoid duplicate output/files
+        if rank == 0:
+            print("\n" + "="*60)
+            print("VALIDATION METRICS")
+            print("="*60)
+            print(f"RMSLE: {rmsle:.6f}")
+            print(f"MAE:   {mae:.2f} USD/m²")
+            print(f"RMSE:  {rmse:.2f} USD/m²")
+            print(f"R²:    {r2:.6f}")
+            print("="*60 + "\n")
+            
+            # Save predictions if requested (only from rank 0)
+            if save_predictions and output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+                pred_df = pd.DataFrame({
+                    'data_id': all_data_ids if all_data_ids else [f'sample_{i}' for i in range(len(all_predictions))],
+                    'construction_cost_per_m2_usd': all_predictions.numpy(),  # Prediction (for submission format)
+                    'ground_truth': all_targets.numpy(),  # Ground truth (additional column)
+                    'error': (all_predictions - all_targets).numpy(),
+                    'abs_error': torch.abs(all_predictions - all_targets).numpy()
+                })
+                # Generate filename with checkpoint name and timestamp
+                if checkpoint_path:
+                    checkpoint_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
+                else:
+                    checkpoint_name = 'unknown'
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                pred_path = os.path.join(output_dir, f'val_predictions_{checkpoint_name}_{timestamp}.csv')
+                pred_df.to_csv(pred_path, index=False)
+                print(f"Saved validation predictions to: {pred_path}")
     
     return metrics, all_predictions, all_data_ids
 
@@ -202,26 +273,38 @@ def run_inference(
     """
     Run inference on test set and generate submission CSV.
     
+    Supports multi-GPU inference by gathering predictions from all GPUs.
+    Only rank 0 saves results to avoid duplicate files.
+    
     Args:
         model: Trained model
         test_loader: DataLoader for test set
         device: Device to run inference on
         output_path: Path to save submission CSV
+        checkpoint_path: Path to checkpoint (for filename generation)
         data_ids: List of data IDs (if available from dataset)
     """
     model.eval()
     
+    # Check if running in distributed mode
+    is_distributed = dist.is_initialized() if hasattr(dist, 'is_initialized') else False
+    world_size = dist.get_world_size() if is_distributed else 1
+    rank = dist.get_rank() if is_distributed else 0
+    
     all_predictions = []
     all_data_ids = []
     
-    # Calculate total batches for progress
+    # Calculate total batches for progress (only print from rank 0)
     total_batches = len(test_loader)
-    print(f"Total batches: {total_batches}")
+    if rank == 0:
+        print(f"Total batches: {total_batches}")
+    
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_loader):
-            # Print progress for every batch (single line, updates in place)
-            progress_pct = 100 * (batch_idx + 1) / total_batches
-            print(f"\r  Test inference: {batch_idx + 1}/{total_batches} batches ({progress_pct:.1f}%)", end='', flush=True)
+            # Print progress for every batch (single line, updates in place) - only from rank 0
+            if rank == 0:
+                progress_pct = 100 * (batch_idx + 1) / total_batches
+                print(f"\r  Test inference: {batch_idx + 1}/{total_batches} batches ({progress_pct:.1f}%)", end='', flush=True)
             
             # Unpack batch: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)
             if len(batch) != 9:
@@ -256,49 +339,56 @@ def run_inference(
             if data_id is not None:
                 all_data_ids.extend(data_id)
         
-        print()  # New line after progress
-        
-        print()  # New line after progress
+        if rank == 0:
+            print()  # New line after progress
+            print()  # New line after progress
     
-    # Concatenate all predictions
+    # Gather predictions from all GPUs if running in distributed mode
+    if is_distributed:
+        all_predictions = _gather_tensors(all_predictions, world_size)
+        all_data_ids = _gather_lists(all_data_ids, world_size) if all_data_ids else []
+    
+    # Concatenate all predictions (now from all GPUs if distributed)
     all_predictions = torch.cat(all_predictions, dim=0).numpy()
     
-    # Create submission DataFrame
-    if all_data_ids:
-        submission_df = pd.DataFrame({
-            'data_id': all_data_ids,
-            'construction_cost_per_m2_usd': all_predictions
-        })
-    else:
-        # If no data IDs, use sequential indices
-        submission_df = pd.DataFrame({
-            'data_id': [f'test_{i}' for i in range(len(all_predictions))],
-            'construction_cost_per_m2_usd': all_predictions
-        })
-    
-    # Generate filename with checkpoint name and timestamp
-    if checkpoint_path:
-        checkpoint_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        # If output_path is a directory or ends with '/', create filename inside it
-        if os.path.isdir(output_path) or output_path.endswith('/'):
-            output_path = os.path.join(output_path, f'submission_{checkpoint_name}_{timestamp}.csv')
+    # Only save from rank 0 to avoid duplicate files
+    if rank == 0:
+        # Create submission DataFrame
+        if all_data_ids:
+            submission_df = pd.DataFrame({
+                'data_id': all_data_ids,
+                'construction_cost_per_m2_usd': all_predictions
+            })
         else:
-            # If output_path is a file path, insert checkpoint name and timestamp before extension
-            base_dir = os.path.dirname(output_path) or '.'
-            base_name = os.path.splitext(os.path.basename(output_path))[0]
-            ext = os.path.splitext(output_path)[1] or '.csv'
-            output_path = os.path.join(base_dir, f'{base_name}_{checkpoint_name}_{timestamp}{ext}')
-    
-    # Save submission
-    submission_df.to_csv(output_path, index=False)
-    print(f"\n✅ Inference complete! Processed {len(all_predictions)} test samples")
-    print(f"✅ Submission saved to: {output_path}")
-    print(f"   Number of predictions: {len(submission_df)}")
-    print(f"   Prediction range: [{all_predictions.min():.2f}, {all_predictions.max():.2f}] USD/m²")
-    print("="*60)
-    print(f"   Prediction mean: {all_predictions.mean():.2f} USD/m²")
-    print(f"   Prediction std: {all_predictions.std():.2f} USD/m²")
+            # If no data IDs, use sequential indices
+            submission_df = pd.DataFrame({
+                'data_id': [f'test_{i}' for i in range(len(all_predictions))],
+                'construction_cost_per_m2_usd': all_predictions
+            })
+        
+        # Generate filename with checkpoint name and timestamp
+        if checkpoint_path:
+            checkpoint_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            # If output_path is a directory or ends with '/', create filename inside it
+            if os.path.isdir(output_path) or output_path.endswith('/'):
+                output_path = os.path.join(output_path, f'submission_{checkpoint_name}_{timestamp}.csv')
+            else:
+                # If output_path is a file path, insert checkpoint name and timestamp before extension
+                base_dir = os.path.dirname(output_path) or '.'
+                base_name = os.path.splitext(os.path.basename(output_path))[0]
+                ext = os.path.splitext(output_path)[1] or '.csv'
+                output_path = os.path.join(base_dir, f'{base_name}_{checkpoint_name}_{timestamp}{ext}')
+        
+        # Save submission
+        submission_df.to_csv(output_path, index=False)
+        print(f"\n✅ Inference complete! Processed {len(all_predictions)} test samples")
+        print(f"✅ Submission saved to: {output_path}")
+        print(f"   Number of predictions: {len(submission_df)}")
+        print(f"   Prediction range: [{all_predictions.min():.2f}, {all_predictions.max():.2f}] USD/m²")
+        print("="*60)
+        print(f"   Prediction mean: {all_predictions.mean():.2f} USD/m²")
+        print(f"   Prediction std: {all_predictions.std():.2f} USD/m²")
 
 
 def run_evaluation(args):

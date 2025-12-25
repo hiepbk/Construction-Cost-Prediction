@@ -511,9 +511,12 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     
     # Professional cleanup: Use PyTorch's distributed cleanup mechanisms
     # This properly handles DDP process destruction and resource cleanup
+    # IMPORTANT: Check rank before destroying DDP, so we know which process to run evaluation on
+    is_main_process = True
     try:
-        # Properly destroy DDP process group to prevent semaphore leaks
         if dist.is_initialized():
+            is_main_process = (dist.get_rank() == 0)
+            # Properly destroy DDP process group to prevent semaphore leaks
             dist.destroy_process_group()
     except Exception as e:
         # Log but don't fail on cleanup errors (cleanup should be best-effort)
@@ -525,17 +528,23 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
         torch.cuda.synchronize()
     
     # Run automatic evaluation if enabled
+    # CRITICAL: Only run evaluation on main process (rank 0) to avoid duplicate evaluation
+    # After DDP cleanup, all processes are still running, but we only want one to evaluate
     evaluator_config = getattr(hparams, 'evaluator', None)
     if evaluator_config and getattr(evaluator_config, 'enabled', False):
-        print("\n" + "="*60)
-        print("RUNNING AUTOMATIC EVALUATION")
-        print("="*60)
-        
-        success = _run_evaluation_for_fold(logdir, hparams, evaluator_config)
-        if success:
-            print("\n✅ Automatic evaluation complete!")
+        if is_main_process:
+            print("\n" + "="*60)
+            print("RUNNING AUTOMATIC EVALUATION")
+            print("="*60)
+            
+            success = _run_evaluation_for_fold(logdir, hparams, evaluator_config)
+            if success:
+                print("\n✅ Automatic evaluation complete!")
+            else:
+                print("\n⚠️  Automatic evaluation failed or skipped")
         else:
-            print("\n⚠️  Automatic evaluation failed or skipped")
+            # Other processes wait/skip evaluation (they would have been destroyed in DDP cleanup anyway)
+            print(f"\n⏭️  Skipping evaluation on non-main process (rank != 0)")
     
     return model, logdir
 
