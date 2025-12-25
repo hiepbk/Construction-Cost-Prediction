@@ -1790,40 +1790,41 @@ class MultiTaskCountryAwareRegression(nn.Module):
                 country_mean[mask] = self.target_mean_by_country[country_id]
                 country_std[mask] = self.target_std_by_country[country_id]
         
-        # Denormalize predictions and targets (after setting all country-specific stats)
+        # Denormalize predictions (after setting all country-specific stats)
+        # gt_regression is in normalized log space, decode it using country-specific normalization
         pred_denorm = gt_regression * country_std + country_mean
-        target_denorm = target * country_std + country_mean
         
-        # Decode to original scale
+        # Decode prediction to original scale
         if self.target_log_transform:
             pred_original = torch.expm1(torch.clamp(pred_denorm, min=-10.0, max=10.0))
-            target_original_decoded = torch.expm1(torch.clamp(target_denorm, min=-10.0, max=10.0))
         else:
             pred_original = pred_denorm
-            target_original_decoded = target_denorm
+        
+        # target_original is already in original scale from dataloader - use it directly!
+        # Do NOT decode it again - it's already the ground truth in USD/m²
         
         # Ensure non-negative
         pred_original = torch.clamp(pred_original, min=0.0)
-        target_original_decoded = torch.clamp(target_original_decoded, min=0.0)
+        target_original = torch.clamp(target_original, min=0.0)
         
         # Calculate ALL regression losses (vectorized, no loops)
         # 1. RMSLE: sqrt(mean((log1p(y_true_orig) - log1p(y_pred_orig))^2))
         log_pred = torch.log1p(pred_original)
-        log_true = torch.log1p(target_original_decoded)
+        log_true = torch.log1p(target_original)
         squared_log_error = (log_true - log_pred) ** 2
         rmsle = torch.sqrt(torch.mean(squared_log_error))
         loss_dict['rmsle'] = rmsle
         
         # 2. Huber loss on original scale
-        huber = self.huber_loss(pred_original, target_original_decoded)
+        huber = self.huber_loss(pred_original, target_original)
         loss_dict['huber'] = huber
         
         # 3. MAE (L1) loss on original scale
-        mae = torch.mean(torch.abs(pred_original - target_original_decoded))
+        mae = torch.mean(torch.abs(pred_original - target_original))
         loss_dict['mae'] = mae
         
         # 4. MSE (L2) loss on original scale
-        mse = torch.mean((pred_original - target_original_decoded) ** 2)
+        mse = torch.mean((pred_original - target_original) ** 2)
         loss_dict['mse'] = mse
         
         # Calculate RMSE from MSE (for monitoring)
