@@ -175,32 +175,27 @@ num_classes: 1
 #   huber_delta: 1.0
 
 regression_head:
-  type: GatedAttentionPoolingRegression
+  type: MultiTaskCountryAwareRegression
   p: 0.2
   n_hidden: 2048
-  gate_hidden: 256    # optional, defaults to n_input//2
+  num_queries: 1      # learnable queries (1–4 typical)
+  num_heads: 8        # attention heads for query pooling
   loss_type:
     rmsle:
       self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
-      global_weight: 1.0  # Weight for contribution to total loss (percentage/contribution)
-    # classification_ce:  # Uncomment to enable multi-task head (classification + regression)
-    #   self_weight: 1.0
-    #   global_weight: 0.2
-                                  # Weight for country classification loss (equal to rmsle for balanced multi-task)
-  
-  # Overall target statistics (used when country-specific stats not provided)
-  target_mean: 6.513477  # Mean of log(1 + target) values (overall)
-  target_std: 1.101045   # Std of log(1 + target) values (overall)
+      global_weight: 0.2  # Weight for contribution to total loss (percentage/contribution)
+    classification_ce:  # Classification loss (same format as other losses)
+      self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
+      global_weight: 0.2  # Weight for contribution to total loss (percentage/contribution)
   
   # Country-specific target statistics (if provided, enables country-specific normalization)
   # Format: {country_id: value} where country_id is 0 or 1
-  # Uncomment to enable country-specific normalization:
-  # target_mean_by_country:
-  #   0: 7.478149  # Mean of log(1 + target) for country 0
-  #   1: 5.304986  # Mean of log(1 + target) for country 1
-  # target_std_by_country:
-  #   0: 0.138897  # Std of log(1 + target) for country 0
-  #   1: 0.283889  # Std of log(1 + target) for country 1
+  target_mean_by_country:
+    0: 7.478149  # Mean of log(1 + target) for country 0
+    1: 5.304986  # Mean of log(1 + target) for country 1
+  target_std_by_country:
+    0: 0.138897  # Std of log(1 + target) for country 0
+    1: 0.283889  # Std of log(1 + target) for country 1
   
   huber_delta: 1.0
 

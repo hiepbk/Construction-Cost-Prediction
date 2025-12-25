@@ -88,6 +88,9 @@ class SSLOnlineEvaluatorRegression(Callback):
         # Track ALL validation samples by data_id (unique and deterministic)
         self.tracked_val_preds = {}  # Dict: {data_id: prediction_value}
         self.tracked_val_targets = {}  # Dict: {data_id: target_value}
+        # Track classification predictions for WandB logging
+        self.tracked_val_classification_preds = {}  # Dict: {data_id: predicted_class_id}
+        self.tracked_val_classification_targets = {}  # Dict: {data_id: ground_truth_class_id}
         self.debug_printed_this_epoch = False  # Track if we've already printed debug info this epoch
     
     def on_fit_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
@@ -196,10 +199,10 @@ class SSLOnlineEvaluatorRegression(Callback):
         pl_module: LightningModule,
         batch: Sequence,
         dataset=None,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Dict[str, Tensor], Optional[list]]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Dict[str, Tensor], Optional[list], Optional[Dict], Optional[Tensor]]:
         """
         Shared step for training and validation.
-        Returns: (predictions_normalized, targets_normalized, predictions_denorm, targets_denorm, loss, loss_dict, data_ids)
+        Returns: (predictions_normalized, targets_normalized, predictions_denorm, targets_denorm, loss, loss_dict, data_ids, head_result, country)
         """
         with torch.no_grad():
             with set_training(pl_module, False):
@@ -258,7 +261,7 @@ class SSLOnlineEvaluatorRegression(Callback):
         else:
             targets_normalized = None
         
-        return predictions_normalized, targets_normalized, predictions_original_scale, targets_original_scale, loss, loss_dict, data_ids
+        return predictions_normalized, targets_normalized, predictions_original_scale, targets_original_scale, loss, loss_dict, data_ids, head_result, country
     
     def _rmsle_loss(self, y_pred: torch.Tensor, y_true_original: torch.Tensor) -> torch.Tensor:
         """
@@ -312,7 +315,7 @@ class SSLOnlineEvaluatorRegression(Callback):
         # Get dataset for target extraction if needed
         dataset = trainer.train_dataloader.dataset if hasattr(trainer.train_dataloader, 'dataset') else None
         
-        preds_norm, targets_norm, preds_denorm, targets_denorm, loss, loss_dict, _ = self.shared_step(
+        preds_norm, targets_norm, preds_denorm, targets_denorm, loss, loss_dict, _, head_result, country = self.shared_step(
             pl_module, batch, dataset
         )
         
@@ -333,6 +336,8 @@ class SSLOnlineEvaluatorRegression(Callback):
         # Clear stored predictions for this epoch (tracked by data_id)
         self.tracked_val_preds = {}
         self.tracked_val_targets = {}
+        self.tracked_val_classification_preds = {}
+        self.tracked_val_classification_targets = {}
         # Reset debug print flag for this epoch
         self.debug_printed_this_epoch = False
     
@@ -348,7 +353,7 @@ class SSLOnlineEvaluatorRegression(Callback):
         """Evaluate regression head on validation batch."""
         dataset = trainer.val_dataloaders[dataloader_idx].dataset if hasattr(trainer.val_dataloaders[dataloader_idx], 'dataset') else None
         
-        preds_norm, targets_norm, preds_denorm, targets_denorm, loss, loss_dict, data_ids = self.shared_step(
+        preds_norm, targets_norm, preds_denorm, targets_denorm, loss, loss_dict, data_ids, head_result, country = self.shared_step(
             pl_module, batch, dataset
         )
         
@@ -362,25 +367,15 @@ class SSLOnlineEvaluatorRegression(Callback):
                     self.tracked_val_preds[data_id] = float(preds_denorm[local_idx].cpu().detach())
                     # Store target (already in original scale from shared_step)
                     self.tracked_val_targets[data_id] = float(targets_denorm[local_idx].cpu().detach())
-        else:
-            # Fallback: if data_ids not in batch, use dataset lookup (less reliable)
-            val_dataset = trainer.val_dataloaders[dataloader_idx].dataset if hasattr(trainer.val_dataloaders[dataloader_idx], 'dataset') else None
-            val_dataloader = trainer.val_dataloaders[dataloader_idx]
-            if hasattr(val_dataloader, 'batch_size') and val_dataloader.batch_size is not None:
-                batch_size = val_dataloader.batch_size
-            else:
-                batch_size = len(preds_denorm)
-            start_idx = batch_idx * batch_size
-            
-            for local_idx in range(len(preds_denorm)):
-                global_idx = start_idx + local_idx
-                if val_dataset is not None and hasattr(val_dataset, 'data_ids') and val_dataset.data_ids is not None:
-                    data_id = str(val_dataset.data_ids[global_idx])
-                else:
-                    data_id = f"sample_{global_idx}"
-                
-                self.tracked_val_preds[data_id] = float(preds_denorm[local_idx].cpu().detach())
-                self.tracked_val_targets[data_id] = float(targets_denorm[local_idx].cpu().detach())
+                    
+                    # Track classification predictions (if multi-task head)
+                    if 'classification_ce' in loss_dict and country is not None:
+                        classification_logits = head_result.get('classification_logits', None)
+                        if classification_logits is not None:
+                            country_pred = classification_logits.argmax(dim=1)  # (B,)
+                            if local_idx < len(country_pred):
+                                self.tracked_val_classification_preds[data_id] = int(country_pred[local_idx].cpu().detach())
+                                self.tracked_val_classification_targets[data_id] = int(country[local_idx].cpu().detach())
         
         # Store loss_dict for epoch-end aggregation (head already calculated all losses)
         self.val_losses.append({k: v.detach().cpu() for k, v in loss_dict.items()})
@@ -453,6 +448,29 @@ class SSLOnlineEvaluatorRegression(Callback):
             
             if logged_count == 0:
                 print(f"⚠️ Warning: No validation samples were logged. Available predictions: {list(self.tracked_val_preds.keys())}")
+        
+        # Log ALL tracked classification predictions with data_id to WandB (similar to regression)
+        if len(self.tracked_val_classification_preds) > 0:
+            # Group predictions by ground truth class_id
+            predictions_by_class = {}  # {class_id: {data_id: prediction}}
+            for data_id in self.tracked_val_classification_preds.keys():
+                if data_id in self.tracked_val_classification_targets:
+                    pred_class = self.tracked_val_classification_preds[data_id]
+                    target_class = self.tracked_val_classification_targets[data_id]
+                    
+                    if target_class not in predictions_by_class:
+                        predictions_by_class[target_class] = {}
+                    predictions_by_class[target_class][data_id] = pred_class
+            
+            # Log predictions grouped by ground truth class_id
+            for class_id, preds_dict in predictions_by_class.items():
+                # Format title: "groundtruth of class_id::{class_id}"
+                title = f"groundtruth of class_id::{class_id}"
+                
+                # Log each prediction (0 or 1) as a separate metric under "classification" group
+                # This creates line charts showing predictions over epochs
+                for data_id, pred_class in preds_dict.items():
+                    pl_module.log(f"classification/{title}", float(pred_class), on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         
         # Reset losses storage for next epoch
         self.val_losses = []

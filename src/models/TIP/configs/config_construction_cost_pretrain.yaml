@@ -236,11 +236,14 @@ regression_head:
   num_heads: 8        # attention heads for query pooling
   loss_type:
     rmsle:
-      self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
-      global_weight: 0.2  # Weight for contribution to total loss (percentage/contribution)
+      self_weight: 10.0  # Weight to multiply raw loss (for normalization, user manually tunes)
+      global_weight: 0.5  # Weight for contribution to total loss (percentage/contribution)
+    # mse:
+    #   self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
+    #   global_weight: 0.5  # Weight for contribution to total loss (percentage/contribution)
     classification_ce:  # Classification loss (same format as other losses)
-      self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
-      global_weight: 0.2  # Weight for contribution to total loss (percentage/contribution)
+      self_weight: 1000.0  # Weight to multiply raw loss (for normalization, user manually tunes)
+      global_weight: 0.5  # Weight for contribution to total loss (percentage/contribution)
   
   # Country-specific target statistics (if provided, enables country-specific normalization)
   # Format: {country_id: value} where country_id is 0 or 1

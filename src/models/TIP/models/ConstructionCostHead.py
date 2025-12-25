@@ -303,6 +303,10 @@ class RegressionMLP(nn.Module):
                 global_weight = self.loss_global_weights.get(loss_name, 1.0)
                 normalized_loss = self_weight * raw_loss
                 contribution = global_weight * normalized_loss
+                
+                # Update loss_dict to store normalized loss (after self_weight) for wandb logging
+                loss_dict[loss_name] = normalized_loss
+                
                 total_loss = total_loss + contribution
             else:
                 raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
@@ -597,6 +601,10 @@ class RegressionMLPTest(nn.Module):
                 global_weight = self.loss_global_weights.get(loss_name, 1.0)
                 normalized_loss = self_weight * raw_loss
                 contribution = global_weight * normalized_loss
+                
+                # Update loss_dict to store normalized loss (after self_weight) for wandb logging
+                loss_dict[loss_name] = normalized_loss
+                
                 total_loss = total_loss + contribution
             else:
                 raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
@@ -993,6 +1001,10 @@ class MixtureOfExpertsRegression(nn.Module):
                 global_weight = self.loss_global_weights.get(loss_name, 1.0)
                 normalized_loss = self_weight * raw_loss
                 contribution = global_weight * normalized_loss
+                
+                # Update loss_dict to store normalized loss (after self_weight) for wandb logging
+                loss_dict[loss_name] = normalized_loss
+                
                 total_loss = total_loss + contribution
             else:
                 raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
@@ -1354,6 +1366,10 @@ class AttentionAggregationRegression(nn.Module):
                 global_weight = self.loss_global_weights.get(loss_name, 1.0)
                 normalized_loss = self_weight * raw_loss
                 contribution = global_weight * normalized_loss
+                
+                # Update loss_dict to store normalized loss (after self_weight) for wandb logging
+                loss_dict[loss_name] = normalized_loss
+                
                 total_loss = total_loss + contribution
             else:
                 raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
@@ -1920,6 +1936,10 @@ class MultiTaskCountryAwareRegression(nn.Module):
                 global_weight = self.loss_global_weights.get(loss_name, 1.0)
                 normalized_loss = self_weight * raw_loss
                 contribution = global_weight * normalized_loss
+                
+                # Update loss_dict to store normalized loss (after self_weight) for wandb logging
+                loss_dict[loss_name] = normalized_loss
+                
                 total_loss = total_loss + contribution  # ALL losses (including classification_ce) go to total_loss for backprop
                 
                 # Track regression losses separately for monitoring (exclude classification_ce from regression_total only)

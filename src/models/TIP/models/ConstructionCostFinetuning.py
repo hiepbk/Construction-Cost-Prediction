@@ -64,6 +64,9 @@ class ConstructionCostFinetuning(pl.LightningModule):
         # Track predictions for WandB logging (like pretraining)
         self.tracked_val_preds = {}  # Dict: {data_id: prediction_value}
         self.tracked_val_targets = {}  # Dict: {data_id: target_value}
+        # Track classification predictions for WandB logging
+        self.tracked_val_classification_preds = {}  # Dict: {data_id: predicted_class_id}
+        self.tracked_val_classification_targets = {}  # Dict: {data_id: ground_truth_class_id}
         
         # Target normalization parameters are stored in the head, not here
         # Get them from head for logging purposes only
@@ -235,6 +238,14 @@ class ConstructionCostFinetuning(pl.LightningModule):
             for idx, did in enumerate(data_id):
                 self.tracked_val_preds[str(did)] = float(y_hat_original[idx].cpu().detach())
                 self.tracked_val_targets[str(did)] = float(y_true_original[idx].cpu().detach())
+                
+                # Track classification predictions (if multi-task head)
+                if 'classification_ce' in loss_dict and country_gt is not None:
+                    classification_logits = head_result.get('classification_logits', None)
+                    if classification_logits is not None:
+                        country_pred = classification_logits.argmax(dim=1)  # (B,)
+                        self.tracked_val_classification_preds[str(did)] = int(country_pred[idx].cpu().detach())
+                        self.tracked_val_classification_targets[str(did)] = int(country_gt[idx].cpu().detach())
         
         # Store loss_dict for epoch-end aggregation (head already calculated all losses)
         self.val_losses.append({k: v.detach().cpu() for k, v in loss_dict.items()})
@@ -261,6 +272,8 @@ class ConstructionCostFinetuning(pl.LightningModule):
         """Clear tracked predictions and losses at start of validation epoch"""
         self.tracked_val_preds = {}
         self.tracked_val_targets = {}
+        self.tracked_val_classification_preds = {}
+        self.tracked_val_classification_targets = {}
         self.val_losses = []  # Reset for new epoch
     
     def validation_epoch_end(self, _) -> None:
@@ -312,6 +325,29 @@ class ConstructionCostFinetuning(pl.LightningModule):
                     # Group under "regression" chart group in WandB
                     # The logged value is the FINAL prediction in USD/m² (original scale)
                     self.log(f"regression/{title}", pred_val, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+        
+        # Log ALL tracked classification predictions with data_id to WandB (similar to regression)
+        if len(self.tracked_val_classification_preds) > 0:
+            # Group predictions by ground truth class_id
+            predictions_by_class = {}  # {class_id: {data_id: prediction}}
+            for data_id in self.tracked_val_classification_preds.keys():
+                if data_id in self.tracked_val_classification_targets:
+                    pred_class = self.tracked_val_classification_preds[data_id]
+                    target_class = self.tracked_val_classification_targets[data_id]
+                    
+                    if target_class not in predictions_by_class:
+                        predictions_by_class[target_class] = {}
+                    predictions_by_class[target_class][data_id] = pred_class
+            
+            # Log predictions grouped by ground truth class_id
+            for class_id, preds_dict in predictions_by_class.items():
+                # Format title: "groundtruth of class_id::{class_id}"
+                title = f"groundtruth of class_id::{class_id}"
+                
+                # Log each prediction (0 or 1) as a separate metric under "classification" group
+                # This creates line charts showing predictions over epochs
+                for data_id, pred_class in preds_dict.items():
+                    self.log(f"classification/{title}", float(pred_class), on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         
         # Track best metrics (only update if value is finite and better)
         if not (mae_val == float('inf') or mae_val != mae_val) and mae_val < self.best_val_mae:
