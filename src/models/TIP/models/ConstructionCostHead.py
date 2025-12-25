@@ -296,6 +296,8 @@ class RegressionMLP(nn.Module):
         
         # Calculate total weighted loss (only losses in loss_config contribute)
         # Formula: normalized_loss = self_weight * raw_loss, then contribution = global_weight * normalized_loss
+        raw_losses = {}  # Store raw losses for evaluation/metrics
+        
         for loss_name in self.loss_config.keys():
             if loss_name in loss_dict:
                 raw_loss = loss_dict[loss_name]
@@ -304,12 +306,18 @@ class RegressionMLP(nn.Module):
                 normalized_loss = self_weight * raw_loss
                 contribution = global_weight * normalized_loss
                 
+                # Store raw loss for evaluation/metrics (original value without self_weight)
+                raw_losses[f'{loss_name}_raw'] = raw_loss
+                
                 # Update loss_dict to store normalized loss (after self_weight) for wandb logging
                 loss_dict[loss_name] = normalized_loss
                 
                 total_loss = total_loss + contribution
             else:
                 raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
+        
+        # Add raw losses to loss_dict for evaluation/metrics
+        loss_dict.update(raw_losses)
         
         # Store total weighted loss
         loss_dict['total'] = total_loss
@@ -594,6 +602,8 @@ class RegressionMLPTest(nn.Module):
         
         # Calculate total weighted loss (only losses in loss_config contribute)
         # Formula: normalized_loss = self_weight * raw_loss, then contribution = global_weight * normalized_loss
+        raw_losses = {}  # Store raw losses for evaluation/metrics
+        
         for loss_name in self.loss_config.keys():
             if loss_name in loss_dict:
                 raw_loss = loss_dict[loss_name]
@@ -602,12 +612,18 @@ class RegressionMLPTest(nn.Module):
                 normalized_loss = self_weight * raw_loss
                 contribution = global_weight * normalized_loss
                 
+                # Store raw loss for evaluation/metrics (original value without self_weight)
+                raw_losses[f'{loss_name}_raw'] = raw_loss
+                
                 # Update loss_dict to store normalized loss (after self_weight) for wandb logging
                 loss_dict[loss_name] = normalized_loss
                 
                 total_loss = total_loss + contribution
             else:
                 raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
+        
+        # Add raw losses to loss_dict for evaluation/metrics
+        loss_dict.update(raw_losses)
         
         # Store total weighted loss
         loss_dict['total'] = total_loss
@@ -994,6 +1010,8 @@ class MixtureOfExpertsRegression(nn.Module):
         
         # Calculate total weighted loss (only losses in loss_config contribute)
         # Formula: normalized_loss = self_weight * raw_loss, then contribution = global_weight * normalized_loss
+        raw_losses = {}  # Store raw losses for evaluation/metrics
+        
         for loss_name in self.loss_config.keys():
             if loss_name in loss_dict:
                 raw_loss = loss_dict[loss_name]
@@ -1002,12 +1020,18 @@ class MixtureOfExpertsRegression(nn.Module):
                 normalized_loss = self_weight * raw_loss
                 contribution = global_weight * normalized_loss
                 
+                # Store raw loss for evaluation/metrics (original value without self_weight)
+                raw_losses[f'{loss_name}_raw'] = raw_loss
+                
                 # Update loss_dict to store normalized loss (after self_weight) for wandb logging
                 loss_dict[loss_name] = normalized_loss
                 
                 total_loss = total_loss + contribution
             else:
                 raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
+        
+        # Add raw losses to loss_dict for evaluation/metrics
+        loss_dict.update(raw_losses)
         
         # Store total weighted loss
         loss_dict['total'] = total_loss
@@ -1359,6 +1383,8 @@ class AttentionAggregationRegression(nn.Module):
         
         # Calculate total weighted loss (only losses in loss_config contribute)
         # Formula: normalized_loss = self_weight * raw_loss, then contribution = global_weight * normalized_loss
+        raw_losses = {}  # Store raw losses for evaluation/metrics
+        
         for loss_name in self.loss_config.keys():
             if loss_name in loss_dict:
                 raw_loss = loss_dict[loss_name]
@@ -1367,12 +1393,18 @@ class AttentionAggregationRegression(nn.Module):
                 normalized_loss = self_weight * raw_loss
                 contribution = global_weight * normalized_loss
                 
+                # Store raw loss for evaluation/metrics (original value without self_weight)
+                raw_losses[f'{loss_name}_raw'] = raw_loss
+                
                 # Update loss_dict to store normalized loss (after self_weight) for wandb logging
                 loss_dict[loss_name] = normalized_loss
                 
                 total_loss = total_loss + contribution
             else:
                 raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
+        
+        # Add raw losses to loss_dict for evaluation/metrics
+        loss_dict.update(raw_losses)
         
         # Store total weighted loss
         loss_dict['total'] = total_loss
@@ -1928,6 +1960,9 @@ class MultiTaskCountryAwareRegression(nn.Module):
         total_loss = 0.0
         regression_total = 0.0
         
+        # Store raw losses for evaluation/metrics (before normalization)
+        raw_losses = {}
+        
         # Process ALL losses in the same loop (classification_ce is just another loss like rmsle, mse, etc.)
         for loss_name in self.loss_config.keys():
             if loss_name in loss_dict:
@@ -1936,6 +1971,9 @@ class MultiTaskCountryAwareRegression(nn.Module):
                 global_weight = self.loss_global_weights.get(loss_name, 1.0)
                 normalized_loss = self_weight * raw_loss
                 contribution = global_weight * normalized_loss
+                
+                # Store raw loss for evaluation/metrics (original value without self_weight)
+                raw_losses[f'{loss_name}_raw'] = raw_loss
                 
                 # Update loss_dict to store normalized loss (after self_weight) for wandb logging
                 loss_dict[loss_name] = normalized_loss
@@ -1947,6 +1985,9 @@ class MultiTaskCountryAwareRegression(nn.Module):
                     regression_total = regression_total + contribution
             else:
                 raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
+        
+        # Add raw losses to loss_dict for evaluation/metrics
+        loss_dict.update(raw_losses)
         
         loss_dict['regression'] = regression_total
         loss_dict['total'] = total_loss

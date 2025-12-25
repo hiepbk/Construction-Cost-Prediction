@@ -369,13 +369,15 @@ class SSLOnlineEvaluatorRegression(Callback):
                     self.tracked_val_targets[data_id] = float(targets_denorm[local_idx].cpu().detach())
                     
                     # Track classification predictions (if multi-task head)
+                    # Apply threshold 0.5 to get binary prediction (0 or 1), not probabilities
                     if 'classification_ce' in loss_dict and country is not None:
-                        classification_logits = head_result.get('classification_logits', None)
-                        if classification_logits is not None:
-                            country_pred = classification_logits.argmax(dim=1)  # (B,)
-                            if local_idx < len(country_pred):
-                                self.tracked_val_classification_preds[data_id] = int(country_pred[local_idx].cpu().detach())
-                                self.tracked_val_classification_targets[data_id] = int(country[local_idx].cpu().detach())
+                        classification_probs = head_result.get('classification_probs', None)
+                        if classification_probs is not None and local_idx < len(classification_probs):
+                            # Apply threshold 0.5 to get binary prediction (0 or 1)
+                            prob = classification_probs[local_idx, 1].cpu().detach()  # Probability of class 1
+                            pred_class = 1 if prob > 0.5 else 0
+                            self.tracked_val_classification_preds[data_id] = pred_class
+                            self.tracked_val_classification_targets[data_id] = int(country[local_idx].cpu().detach())
         
         # Store loss_dict for epoch-end aggregation (head already calculated all losses)
         self.val_losses.append({k: v.detach().cpu() for k, v in loss_dict.items()})
@@ -401,9 +403,11 @@ class SSLOnlineEvaluatorRegression(Callback):
             return
         
         # Compute mean of each loss across all batches
-        mae_value = torch.stack([loss_dict['mae'] for loss_dict in self.val_losses if 'mae' in loss_dict]).mean()
-        rmse_value = torch.stack([loss_dict['rmse'] for loss_dict in self.val_losses if 'rmse' in loss_dict]).mean()
-        rmsle_value = torch.stack([loss_dict['rmsle'] for loss_dict in self.val_losses if 'rmsle' in loss_dict]).mean()
+        # Use raw losses (without self_weight) for evaluation/metrics
+        # Raw losses are stored as '{loss_name}_raw' in loss_dict
+        mae_value = torch.stack([loss_dict.get('mae_raw', loss_dict.get('mae', torch.tensor(0.0))) for loss_dict in self.val_losses if 'mae' in loss_dict or 'mae_raw' in loss_dict]).mean()
+        rmse_value = torch.stack([loss_dict.get('rmse_raw', loss_dict.get('rmse', torch.tensor(0.0))) for loss_dict in self.val_losses if 'rmse' in loss_dict or 'rmse_raw' in loss_dict]).mean()
+        rmsle_value = torch.stack([loss_dict.get('rmsle_raw', loss_dict.get('rmsle', torch.tensor(0.0))) for loss_dict in self.val_losses if 'rmsle' in loss_dict or 'rmsle_raw' in loss_dict]).mean()
         
         # Convert to float for logging
         mae_value = float(mae_value.item())
@@ -451,25 +455,18 @@ class SSLOnlineEvaluatorRegression(Callback):
         
         # Log ALL tracked classification predictions with data_id to WandB (similar to regression)
         if len(self.tracked_val_classification_preds) > 0:
-            # Group predictions by ground truth class_id
-            predictions_by_class = {}  # {class_id: {data_id: prediction}}
             for data_id in self.tracked_val_classification_preds.keys():
                 if data_id in self.tracked_val_classification_targets:
                     pred_class = self.tracked_val_classification_preds[data_id]
                     target_class = self.tracked_val_classification_targets[data_id]
                     
-                    if target_class not in predictions_by_class:
-                        predictions_by_class[target_class] = {}
-                    predictions_by_class[target_class][data_id] = pred_class
-            
-            # Log predictions grouped by ground truth class_id
-            for class_id, preds_dict in predictions_by_class.items():
-                # Format title: "groundtruth of class_id::{class_id}"
-                title = f"groundtruth of class_id::{class_id}"
-                
-                # Log each prediction (0 or 1) as a separate metric under "classification" group
-                # This creates line charts showing predictions over epochs
-                for data_id, pred_class in preds_dict.items():
+                    # Format title: "data_id: {data_id}, class_id: {class_id}"
+                    # Similar to regression format: "data_id: {data_id}, {ground_truth_value:.2f} USD/m²"
+                    title = f"data_id: {data_id}, class_id: {target_class}"
+                    
+                    # Log prediction (0 or 1) with data_id and ground truth class_id in the title
+                    # Group under "classification" chart group in WandB
+                    # This creates line charts showing predictions over epochs (0 or 1, not probabilities)
                     pl_module.log(f"classification/{title}", float(pred_class), on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         
         # Reset losses storage for next epoch
