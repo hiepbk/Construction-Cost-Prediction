@@ -93,13 +93,12 @@ class TIP3Loss(Pretraining):
         Tabular-imaging contrastive learning
         Tabular reconstruction learning
         '''
-        # Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)
-        # For pretraining, we ignore target (6th), target_original (7th), and data_id (8th)
+        # Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)
+        # For pretraining, we ignore target (6th), target_original (7th), data_id (8th), and country (9th)
         # These are only used for online regression evaluation, not for pretraining loss
-        if len(batch) == 8:
-            im_views, tab_views, y, _, original_tab, _, _, _ = batch  # Extract but ignore target, target_original, and data_id
-        else:
-            raise ValueError(f"Expected batch size 8, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)")
+        if len(batch) != 9:
+            raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)")
+        im_views, tab_views, y, _, original_tab, _, _, _, _ = batch  # Extract but ignore target, target_original, data_id, and country
 
         # =======================================  itc    =======================================================================
         # Augmented image and unagumented tabular
@@ -137,13 +136,12 @@ class TIP3Loss(Pretraining):
         Tabular-imaging contrastive learning
         Tabular reconstruction learning
         '''
-        # Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)
-        # For pretraining, we ignore target (6th), target_original (7th), and data_id (8th)
+        # Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)
+        # For pretraining, we ignore target (6th), target_original (7th), data_id (8th), and country (9th)
         # These are only used for online regression evaluation, not for pretraining loss
-        if len(batch) == 8:
-            im_views, tab_views, y, original_im, original_tab, _, _, _ = batch  # Extract but ignore target, target_original, and data_id
-        else:
-            raise ValueError(f"Expected batch size 8, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)")
+        if len(batch) != 9:
+            raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)")
+        im_views, tab_views, y, original_im, original_tab, _, _, _, _ = batch  # Extract but ignore target, target_original, data_id, and country
 
         # =======================================  itc    =======================================================================
         # Unaugmented views

@@ -77,8 +77,8 @@ embedding_dim: 2048
 projection_dim: 128
 
 # Training
-# batch_size: 32
-batch_size: 8
+batch_size: 32
+# batch_size: 8
 lr: 3e-4
 weight_decay: 1e-5
 lr_finetune: 1e-3  # For fine-tuning stage

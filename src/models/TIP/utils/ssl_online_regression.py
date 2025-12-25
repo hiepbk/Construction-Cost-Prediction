@@ -129,7 +129,7 @@ class SSLOnlineEvaluatorRegression(Callback):
             if "optimizer_state" in self._recovered_callback_state:
                 self.optimizer.load_state_dict(self._recovered_callback_state["optimizer_state"])
     
-    def to_device(self, batch: Sequence, device: Union[str, torch.device]) -> Tuple[Tensor, Tensor, Optional[Tensor], Optional[Tensor], Optional[list]]:
+    def to_device(self, batch: Sequence, device: Union[str, torch.device]) -> Tuple[Tensor, Tensor, Optional[Tensor], Optional[Tensor], Optional[list], Optional[Tensor]]:
         """Extract inputs and targets from batch, handling different batch formats.
         
         Returns:
@@ -138,22 +138,24 @@ class SSLOnlineEvaluatorRegression(Callback):
             x_t: Tabular input (if available)
             y_original: Original target in original scale (if available) - for RMSLE loss
             data_ids: List of data_ids for this batch (if available)
+            country: Country labels (if available) - for multi-task head
         """
         data_ids = None  # Initialize data_ids
         y_original = None  # Initialize y_original
+        country = None  # Initialize country
         if self.swav:
             x, y = batch
             x = x[0]
             x_t = None
             data_ids = None
             y_original = None
+            country = None
         elif self.multimodal and self.strategy == 'tip':
-            # TIP multimodal batch: (imaging_views, tabular_views, labels, unaugmented_image, unaugmented_tabular, target, target_original, data_id)
-            # Must have exactly 8 elements
-            if len(batch) == 8:
-                x_i, _, contrastive_labels, x_orig, x_t_orig, y, y_original, data_ids = batch
-            else:
-                raise ValueError(f"Expected batch size 8, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)")
+            # TIP multimodal batch: (imaging_views, tabular_views, labels, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)
+            # Must have exactly 9 elements
+            if len(batch) != 9:
+                raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)")
+            x_i, _, contrastive_labels, x_orig, x_t_orig, y, y_original, data_ids, country = batch
             x = x_orig
             x_t = x_t_orig
         elif self.multimodal and self.strategy == 'comparison':
@@ -175,9 +177,11 @@ class SSLOnlineEvaluatorRegression(Callback):
             x_t = x_t.to(device)
         if y_original is not None:
             y_original = y_original.to(device)
+        if country is not None:
+            country = country.to(device)
         # data_ids is a list of strings, no need to move to device
         
-        return x, y, x_t, y_original, data_ids
+        return x, y, x_t, y_original, data_ids, country
     
     
     def shared_step(
@@ -192,7 +196,7 @@ class SSLOnlineEvaluatorRegression(Callback):
         """
         with torch.no_grad():
             with set_training(pl_module, False):
-                x, y, x_t, y_original, data_ids = self.to_device(batch, pl_module.device)
+                x, y, x_t, y_original, data_ids, country = self.to_device(batch, pl_module.device)
                 
                 # Get representations from frozen encoder
                 if x_t is not None:
@@ -215,11 +219,20 @@ class SSLOnlineEvaluatorRegression(Callback):
         if y_original is None:
             raise ValueError("target_original must be in batch. Ensure dataset returns target_original in __getitem__.")
         
-        # Forward pass through regression head with y_original (head handles everything internally)
-        # We only pass y_original - the head will handle decoding and loss calculation
+        # Forward pass through regression head with y_original and country (head handles everything internally)
+        # Pass country if available (needed for MultiTaskCountryAwareRegression head)
+        import inspect
+        sig = inspect.signature(self.online_evaluator.forward)
+        head_kwargs = {
+            'target_original': y_original.float()  # Pass y_original directly, head handles everything
+        }
+        # Only pass country_gt if the head's forward method accepts it
+        if country is not None and 'country_gt' in sig.parameters:
+            head_kwargs['country_gt'] = country  # Pass country for multi-task head
+        
         head_result = self.online_evaluator(
             representations,
-            target_original=y_original.float()  # Pass y_original directly, head handles everything
+            **head_kwargs
         )
         
         # Extract results from head
