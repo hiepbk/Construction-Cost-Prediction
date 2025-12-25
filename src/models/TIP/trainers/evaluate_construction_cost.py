@@ -90,9 +90,9 @@ def evaluate_validation(
             progress_pct = 100 * (batch_idx + 1) / total_batches
             print(f"\r  Validation: {batch_idx + 1}/{total_batches} batches ({progress_pct:.1f}%)", end='', flush=True)
             
-            # Unpack batch: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)
-            if len(batch) != 8:
-                raise ValueError(f"Expected batch size 8, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)")
+            # Unpack batch: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)
+            if len(batch) != 9:
+                raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)")
             imaging_views = batch[0]
             tabular_views = batch[1]
             label = batch[2]
@@ -101,6 +101,7 @@ def evaluate_validation(
             target = batch[5]  # Log-transformed target (for reference)
             target_original = batch[6]  # Original scale target (for metrics)
             data_id = batch[7]
+            country = batch[8]  # Country labels (not used in evaluation, but present in batch)
             
             # Use unaugmented views for evaluation
             # Format: (image, tabular, mask)
@@ -222,9 +223,9 @@ def run_inference(
             progress_pct = 100 * (batch_idx + 1) / total_batches
             print(f"\r  Test inference: {batch_idx + 1}/{total_batches} batches ({progress_pct:.1f}%)", end='', flush=True)
             
-            # Unpack batch: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)
-            if len(batch) != 8:
-                raise ValueError(f"Expected batch size 8, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)")
+            # Unpack batch: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)
+            if len(batch) != 9:
+                raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)")
             imaging_views = batch[0]
             tabular_views = batch[1]
             label = batch[2]
@@ -233,6 +234,7 @@ def run_inference(
             target = batch[5]  # Not used for test set
             target_original = batch[6]  # Not used for test set
             data_id = batch[7]
+            country = batch[8]  # Country labels (not used in inference, but present in batch)
             
             # Use unaugmented views for inference
             x_image = unaugmented_image.to(device)  # (B, 15, H, W)

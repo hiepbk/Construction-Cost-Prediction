@@ -118,28 +118,15 @@ class ConstructionCostFinetuning(pl.LightningModule):
                   (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id)
                   For fine-tuning, we use unaugmented views and target
         """
-        # Unpack batch from ConstructionCostTIPDataset (9 elements with country, or 8 without)
-        if len(batch) == 9:
-            imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country = batch
-            # Use unaugmented views for fine-tuning
-            x = (unaugmented_image, unaugmented_tabular)
-            y = target  # Target is already normalized and log-transformed
-            y_original = target_original  # Ground truth in original scale (USD/m²)
-            country_gt = country  # Country labels (0 or 1) for multi-task head
-        elif len(batch) == 8:
-            # Backward compatibility: old dataset without country
-            imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id = batch
-            x = (unaugmented_image, unaugmented_tabular)
-            y = target
-            y_original = target_original
-            country_gt = None
-        elif len(batch) == 2:
-            # Fallback for other datasets
-            x, y = batch
-            y_original = None  # Not available for other datasets
-            country_gt = None
-        else:
-            raise ValueError(f"Unexpected batch size: {len(batch)}. Expected 9 (ConstructionCostTIPDataset with country), 8 (without country), or 2 (other datasets)")
+        # Unpack batch from ConstructionCostTIPDataset (always 9 elements with country)
+        if len(batch) != 9:
+            raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)")
+        imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country = batch
+        # Use unaugmented views for fine-tuning
+        x = (unaugmented_image, unaugmented_tabular)
+        y = target  # Target is already normalized and log-transformed
+        y_original = target_original  # Ground truth in original scale (USD/m²)
+        country_gt = country  # Country labels (0 or 1) for multi-task head
         
         # Forward pass through model (returns x_m from backbone)
         x_m = self.model.backbone(x, visualize=False)  # (B, 20, 512)
@@ -195,28 +182,15 @@ class ConstructionCostFinetuning(pl.LightningModule):
     
     def validation_step(self, batch: Tuple, _) -> None:
         """Validation step"""
-        # Unpack batch from ConstructionCostTIPDataset (9 elements with country, or 8 without)
-        if len(batch) == 9:
-            imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country = batch
-            # Use unaugmented views for validation
-            x = (unaugmented_image, unaugmented_tabular)
-            y = target  # Target is already normalized and log-transformed
-            y_original = target_original  # Ground truth in original scale (USD/m²)
-            country_gt = country  # Country labels (0 or 1) for multi-task head
-        elif len(batch) == 8:
-            # Backward compatibility: old dataset without country
-            imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id = batch
-            x = (unaugmented_image, unaugmented_tabular)
-            y = target
-            y_original = target_original
-            country_gt = None
-        elif len(batch) == 2:
-            # Fallback for other datasets
-            x, y = batch
-            y_original = None  # Not available for other datasets
-            country_gt = None
-        else:
-            raise ValueError(f"Unexpected batch size: {len(batch)}. Expected 9 (ConstructionCostTIPDataset with country), 8 (without country), or 2 (other datasets)")
+        # Unpack batch from ConstructionCostTIPDataset (always 9 elements with country)
+        if len(batch) != 9:
+            raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)")
+        imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country = batch
+        # Use unaugmented views for validation
+        x = (unaugmented_image, unaugmented_tabular)
+        y = target  # Target is already normalized and log-transformed
+        y_original = target_original  # Ground truth in original scale (USD/m²)
+        country_gt = country  # Country labels (0 or 1) for multi-task head
         
         # Forward pass through model (returns x_m from backbone)
         x_m = self.model.backbone(x, visualize=False)  # (B, 20, 512)
@@ -364,25 +338,14 @@ class ConstructionCostFinetuning(pl.LightningModule):
     
     def test_step(self, batch: Tuple, _) -> None:
         """Test step"""
-        # Unpack batch from ConstructionCostTIPDataset (9 elements with country, or 8 without)
-        if len(batch) == 9:
-            imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country = batch
-            # Use unaugmented views for testing
-            x = (unaugmented_image, unaugmented_tabular)
-            y = target  # Target is already normalized and log-transformed (may be dummy 0.0 for test set)
-            country_gt = country  # Country labels (may be None for test set)
-        elif len(batch) == 8:
-            # Backward compatibility: old dataset without country
-            imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id = batch
-            x = (unaugmented_image, unaugmented_tabular)
-            y = target
-            country_gt = None
-        elif len(batch) == 2:
-            # Fallback for other datasets
-            x, y = batch
-            country_gt = None
-        else:
-            raise ValueError(f"Unexpected batch size: {len(batch)}. Expected 9 (ConstructionCostTIPDataset with country), 8 (without country), or 2 (other datasets)")
+        # Unpack batch from ConstructionCostTIPDataset (always 9 elements with country)
+        if len(batch) != 9:
+            raise ValueError(f"Expected batch size 9, got {len(batch)}. Batch format: (imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country)")
+        imaging_views, tabular_views, label, unaugmented_image, unaugmented_tabular, target, target_original, data_id, country = batch
+        # Use unaugmented views for testing
+        x = (unaugmented_image, unaugmented_tabular)
+        y = target  # Target is already normalized and log-transformed (may be dummy 0.0 for test set)
+        country_gt = country  # Country labels (for multi-task head)
         
         # Forward pass through model (returns x_m from backbone)
         x_m = self.model.backbone(x, visualize=False)  # (B, 20, 512)
