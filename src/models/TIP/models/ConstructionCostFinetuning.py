@@ -242,12 +242,31 @@ class ConstructionCostFinetuning(pl.LightningModule):
                 # Track classification predictions (if multi-task head)
                 # Use selected_country (from argmax) which is already binary (0 or 1)
                 if 'classification_ce' in loss_dict and country_gt is not None:
+                    # IMPORTANT: Get selected_country (argmax indices, 0 or 1), NOT classification_probs (probabilities, 0.0-1.0)
                     selected_country = head_result.get('selected_country', None)
                     if selected_country is not None and idx < len(selected_country):
-                        # selected_country is already binary (0 or 1) from argmax
-                        pred_class = int(selected_country[idx].cpu().detach())
+                        # selected_country is from argmax, so it's already binary (0 or 1)
+                        # Extract the value and ensure it's an integer
+                        pred_class_raw = selected_country[idx].cpu().detach()
+                        # Convert to Python int (0 or 1)
+                        if pred_class_raw.dim() == 0:  # Scalar tensor
+                            pred_class = int(pred_class_raw.item())
+                        else:
+                            pred_class = int(pred_class_raw[0].item())
+                        
+                        # CRITICAL: Ensure it's exactly 0 or 1 (not a probability like 0.5)
+                        if pred_class not in [0, 1]:
+                            # This should never happen if selected_country is from argmax
+                            # But if it does, try to fix by recomputing argmax from logits
+                            classification_logits = head_result.get('classification_logits', None)
+                            if classification_logits is not None:
+                                pred_class = int(classification_logits[idx].argmax().cpu().detach().item())
+                            else:
+                                raise ValueError(f"pred_class={pred_class} is not 0 or 1, and cannot fix without classification_logits")
+                        
+                        # Store the binary prediction (0 or 1)
                         self.tracked_val_classification_preds[str(did)] = pred_class
-                        self.tracked_val_classification_targets[str(did)] = int(country_gt[idx].cpu().detach())
+                        self.tracked_val_classification_targets[str(did)] = int(country_gt[idx].cpu().detach().item())
         
         # Store loss_dict for epoch-end aggregation (head already calculated all losses)
         self.val_losses.append({k: v.detach().cpu() for k, v in loss_dict.items()})
@@ -316,7 +335,10 @@ class ConstructionCostFinetuning(pl.LightningModule):
         self.log('val_rmsle', rmsle_val, on_epoch=True, on_step=False, prog_bar=True, logger=False, sync_dist=True, batch_size=batch_size)
         
         # Log ALL tracked sample predictions with data_id to WandB (like pretraining)
-        if len(self.tracked_val_preds) > 0:
+        # Log ALL tracked regression predictions with data_id to WandB
+        # CRITICAL: Only log from rank 0 to avoid duplicate/conflicting entries when same data_id appears on multiple GPUs
+        # With sync_dist=True, averaging across GPUs might be okay for regression, but to avoid confusion, only rank 0 logs
+        if self.trainer.is_global_zero and len(self.tracked_val_preds) > 0:
             for data_id in self.tracked_val_preds.keys():
                 if data_id in self.tracked_val_targets:
                     pred_val = self.tracked_val_preds[data_id]
@@ -328,10 +350,14 @@ class ConstructionCostFinetuning(pl.LightningModule):
                     # Log prediction with data_id and ground truth in the title
                     # Group under "regression" chart group in WandB
                     # The logged value is the FINAL prediction in USD/m² (original scale)
-                    self.log(f"regression/{title}", pred_val, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+                    # Use sync_dist=False since we're only logging from rank 0 (no need to sync)
+                    self.log(f"regression/{title}", pred_val, on_step=False, on_epoch=True, prog_bar=False, sync_dist=False)
         
         # Log ALL tracked classification predictions with data_id to WandB (similar to regression)
-        if len(self.tracked_val_classification_preds) > 0:
+        # CRITICAL: Only log from rank 0 to avoid duplicate/conflicting entries when same data_id appears on multiple GPUs
+        # With sync_dist=False, each GPU would log independently, causing conflicts (e.g., GPU0 logs 0, GPU1 logs 1 for same data_id)
+        # Solution: Only rank 0 logs, ensuring each data_id is logged exactly once per epoch
+        if self.trainer.is_global_zero and len(self.tracked_val_classification_preds) > 0:
             for data_id in self.tracked_val_classification_preds.keys():
                 if data_id in self.tracked_val_classification_targets:
                     pred_class = self.tracked_val_classification_preds[data_id]
@@ -344,7 +370,11 @@ class ConstructionCostFinetuning(pl.LightningModule):
                     # Log prediction (0 or 1) with data_id and ground truth class_id in the title
                     # Group under "classification" chart group in WandB
                     # This creates line charts showing predictions over epochs (0 or 1, not probabilities)
-                    self.log(f"classification/{title}", float(pred_class), on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+                    # Ensure pred_class is binary (0 or 1)
+                    pred_class_binary = int(pred_class)  # Ensure it's an integer
+                    assert pred_class_binary in [0, 1], f"pred_class should be 0 or 1, got {pred_class_binary}"
+                    # Use sync_dist=False since we're only logging from rank 0 (no need to sync)
+                    self.log(f"classification/{title}", float(pred_class_binary), on_step=False, on_epoch=True, prog_bar=False, sync_dist=False)
         
         # Track best metrics (only update if value is finite and better)
         if not (mae_val == float('inf') or mae_val != mae_val) and mae_val < self.best_val_mae:

@@ -371,12 +371,31 @@ class SSLOnlineEvaluatorRegression(Callback):
                     # Track classification predictions (if multi-task head)
                     # Use selected_country (from argmax) which is already binary (0 or 1)
                     if 'classification_ce' in loss_dict and country is not None:
+                        # IMPORTANT: Get selected_country (argmax indices, 0 or 1), NOT classification_probs (probabilities, 0.0-1.0)
                         selected_country = head_result.get('selected_country', None)
                         if selected_country is not None and local_idx < len(selected_country):
-                            # selected_country is already binary (0 or 1) from argmax
-                            pred_class = int(selected_country[local_idx].cpu().detach())
+                            # selected_country is from argmax, so it's already binary (0 or 1)
+                            # Extract the value and ensure it's an integer
+                            pred_class_raw = selected_country[local_idx].cpu().detach()
+                            # Convert to Python int (0 or 1)
+                            if pred_class_raw.dim() == 0:  # Scalar tensor
+                                pred_class = int(pred_class_raw.item())
+                            else:
+                                pred_class = int(pred_class_raw[0].item())
+                            
+                            # CRITICAL: Ensure it's exactly 0 or 1 (not a probability like 0.5)
+                            if pred_class not in [0, 1]:
+                                # This should never happen if selected_country is from argmax
+                                # But if it does, try to fix by recomputing argmax from logits
+                                classification_logits = head_result.get('classification_logits', None)
+                                if classification_logits is not None:
+                                    pred_class = int(classification_logits[local_idx].argmax().cpu().detach().item())
+                                else:
+                                    raise ValueError(f"pred_class={pred_class} is not 0 or 1, and cannot fix without classification_logits")
+                            
+                            # Store the binary prediction (0 or 1)
                             self.tracked_val_classification_preds[data_id] = pred_class
-                            self.tracked_val_classification_targets[data_id] = int(country[local_idx].cpu().detach())
+                            self.tracked_val_classification_targets[data_id] = int(country[local_idx].cpu().detach().item())
         
         # Store loss_dict for epoch-end aggregation (head already calculated all losses)
         self.val_losses.append({k: v.detach().cpu() for k, v in loss_dict.items()})
@@ -423,7 +442,10 @@ class SSLOnlineEvaluatorRegression(Callback):
         
         # Log ALL tracked sample predictions with data_id
         # Group them under "regression" chart group in WandB
-        if len(self.tracked_val_preds) > 0:
+        # Log ALL tracked regression predictions with data_id to WandB
+        # CRITICAL: Only log from rank 0 to avoid duplicate/conflicting entries when same data_id appears on multiple GPUs
+        # With sync_dist=True, averaging across GPUs might be okay for regression, but to avoid confusion, only rank 0 logs
+        if trainer.is_global_zero and len(self.tracked_val_preds) > 0:
             logged_count = 0
             for data_id in self.tracked_val_preds.keys():
                 if data_id in self.tracked_val_targets:
@@ -444,7 +466,8 @@ class SSLOnlineEvaluatorRegression(Callback):
                     # Log prediction with data_id and ground truth in the title
                     # Group under "regression" chart group in WandB
                     # The logged value is the FINAL prediction in USD/m² (original scale, not log-transformed, not normalized)
-                    pl_module.log(f"regression/{title}", final_prediction, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+                    # Use sync_dist=False since we're only logging from rank 0 (no need to sync)
+                    pl_module.log(f"regression/{title}", final_prediction, on_step=False, on_epoch=True, prog_bar=False, sync_dist=False)
                     logged_count += 1
                 else:
                     print(f"⚠️ Warning: data_id {data_id} not found in tracked targets. Available targets: {list(self.tracked_val_targets.keys())}")
@@ -453,7 +476,10 @@ class SSLOnlineEvaluatorRegression(Callback):
                 print(f"⚠️ Warning: No validation samples were logged. Available predictions: {list(self.tracked_val_preds.keys())}")
         
         # Log ALL tracked classification predictions with data_id to WandB (similar to regression)
-        if len(self.tracked_val_classification_preds) > 0:
+        # CRITICAL: Only log from rank 0 to avoid duplicate/conflicting entries when same data_id appears on multiple GPUs
+        # With sync_dist=False, each GPU would log independently, causing conflicts (e.g., GPU0 logs 0, GPU1 logs 1 for same data_id)
+        # Solution: Only rank 0 logs, ensuring each data_id is logged exactly once per epoch
+        if trainer.is_global_zero and len(self.tracked_val_classification_preds) > 0:
             for data_id in self.tracked_val_classification_preds.keys():
                 if data_id in self.tracked_val_classification_targets:
                     pred_class = self.tracked_val_classification_preds[data_id]
@@ -466,7 +492,11 @@ class SSLOnlineEvaluatorRegression(Callback):
                     # Log prediction (0 or 1) with data_id and ground truth class_id in the title
                     # Group under "classification" chart group in WandB
                     # This creates line charts showing predictions over epochs (0 or 1, not probabilities)
-                    pl_module.log(f"classification/{title}", float(pred_class), on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+                    # Ensure pred_class is binary (0 or 1)
+                    pred_class_binary = int(pred_class)  # Ensure it's an integer
+                    assert pred_class_binary in [0, 1], f"pred_class should be 0 or 1, got {pred_class_binary}"
+                    # Use sync_dist=False since we're only logging from rank 0 (no need to sync)
+                    pl_module.log(f"classification/{title}", float(pred_class_binary), on_step=False, on_epoch=True, prog_bar=False, sync_dist=False)
         
         # Reset losses storage for next epoch
         self.val_losses = []
