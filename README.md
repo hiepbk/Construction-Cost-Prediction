@@ -519,32 +519,10 @@ python run.py \
 ```bash
 conda activate ccp
 cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
-python run.py pretrain=True
+
+
+python -u run.py pretrain=True
 ```
-
-**Training Outputs:**
-- Checkpoints saved to: `work_dir/runs/pretrain/{wandb_run_name}/`
-  - `checkpoint_best_rmsle_*.ckpt` - Best checkpoint based on validation RMSLE
-  - `checkpoint_last_epoch_*.ckpt` - Last epoch checkpoint
-- WandB logs: Training metrics, validation metrics, and prediction logs
-
-**Key Config Parameters:**
-- `batch_size`: Batch size (default: 32)
-- `max_epochs`: Number of training epochs (default: 100)
-- `lr`: Learning rate (default: 3e-4)
-- `target_mean`: Target normalization mean (from preprocessing)
-- `target_std`: Target normalization std (from preprocessing)
-- `online_mlp`: Enable online regression evaluation (default: true)
-- `use_wandb`: Enable WandB logging (default: true)
-- `wandb_project`: WandB project name
-- `wandb_entity`: WandB entity/username
-
-**Note:** The model uses:
-- **TIP (Tabular-Image Pre-training)** for self-supervised pretraining
-- **SatlasPretrain** for satellite imagery (auto-downloads pretrained weights)
-- **TabularTransformerEncoder** for tabular data
-- **MultimodalTransformerEncoder** for cross-modal fusion
-
 All pretrained models are automatically downloaded when first used.
 
 ### Fine-Tuning (Stage 2)
@@ -552,17 +530,6 @@ All pretrained models are automatically downloaded when first used.
 After pretraining, fine-tune the regression head on the frozen pretrained backbone:
 
 **Basic Fine-Tuning Command:**
-```bash
-conda activate ccp
-cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
-python run.py \
-    --config-name=config_construction_cost_finetune \
-    finetune=True \
-    checkpoint=/hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/pretrain/tip_pretrain_*/checkpoint_best_rmsle_*.ckpt \
-    batch_size=16 \
-    max_epochs=50 \
-    lr_eval=1e-4
-```
 
 **Recommended Fine-Tuning Command:**
 ```bash

@@ -23,24 +23,24 @@ target: construction_cost  # Required by run.py (for logging and exp name)
 data_base: /hdd/hiep/CODE/Construction_Cost_Prediction
 
 # Checkpoint from pretraining
-checkpoint: /hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/pretrain/QueryAttentionRegression_1223_1951/checkpoint_best_rmsle_99_0.2495.ckpt
+checkpoint: /hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/pretrain/MultiTaskCountryAwareRegression_1230_1040/checkpoint_last_epoch_99.ckpt
 
 # Data paths (absolute paths)
 # Note: For fine-tuning, we need ground truth, so we use train/val splits (NOT test set)
 
 # K-Fold Cross-Validation Options
 use_kfold: False  # If true, use k-fold CV from unified trainval.csv; if false, use fixed train/val splits
-k_fold: 5  # Number of folds (only used if use_kfold=true)
+k_fold: 10  # Number of folds (only used if use_kfold=true)
 k_fold_seed: 42  # Random seed for k-fold splitting (only used if use_kfold=true)
-k_fold_current: -1  # Current fold to use (0-indexed, 0 to k_fold-1). Set to -1 (default) to run all folds automatically (only used if use_kfold=true)
+k_fold_current: 2  # Current fold to use (0-indexed, 0 to k_fold-1). Set to -1 (default) to run all folds automatically (only used if use_kfold=true)
 data_trainval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval/trainval_clean.csv  # Unified trainval CSV (preprocessed, only used if use_kfold=true)
 
 # Fixed Split Options (only used if use_kfold=false)
-# data_train_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean.csv
-data_train_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval/trainval_clean.csv
+data_train_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean.csv
+# data_train_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval/trainval_clean.csv
 data_val_eval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean.csv  # Val split (has ground truth)
-# train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean_metadata.pkl
-train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/trainval_clean_metadata.pkl
+train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean_metadata.pkl
+# train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/trainval_clean_metadata.pkl
 val_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean_metadata.pkl
 
 # Common paths (used for both k-fold and fixed split)
@@ -183,10 +183,13 @@ regression_head:
   loss_type:
     rmsle:
       self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
-      global_weight: 0.2  # Weight for contribution to total loss (percentage/contribution)
+      global_weight: 0.8  # Weight for contribution to total loss (percentage/contribution)
+    mse:
+      self_weight: 0.01  # Weight to multiply raw loss (for normalization, user manually tunes)
+      global_weight: 0.1  # Weight for contribution to total loss (percentage/contribution)
     classification_ce:  # Classification loss (same format as other losses)
       self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
-      global_weight: 0.2  # Weight for contribution to total loss (percentage/contribution)
+      global_weight: 0.1  # Weight for contribution to total loss (percentage/contribution)
   
   # Country-specific target statistics (if provided, enables country-specific normalization)
   # Format: {country_id: value} where country_id is 0 or 1
@@ -206,22 +209,22 @@ lr: 3e-4  # Pretrain LR (not used in fine-tuning, but required by run.py)
 weight_decay: 1e-5  # Pretrain weight decay (not used in fine-tuning, but required by run.py)
 lr_finetune: 1e-4  # Fine-tuning learning rate (reduced from 1e-4 for better convergence)
 weight_decay_finetune: 1e-5  # Fine-tuning weight decay
-regressor_lr_multiplier: 1.0  # Multiplier for regression head LR (reduced from 10.0 to 5.0 for better convergence)
+regressor_lr_multiplier: 5.0  # Multiplier for regression head LR (reduced from 10.0 to 5.0 for better convergence)
 max_epochs: 200
 log_every_n_steps: 1  # Log every step (since we have small number of batches ~13)
 
 # Scheduler (same as pretraining for consistency)
-scheduler: anneal  # Options: anneal (LinearWarmupCosineAnnealingLR), plateau (ReduceLROnPlateau)
-warmup_epochs: 20  # Warmup epochs (increased from 10 for better stability when training from scratch)
-anneal_max_epochs: ${max_epochs}  # Max epochs for anneal scheduler (usually same as max_epochs)
+# scheduler: anneal  # Options: anneal (LinearWarmupCosineAnnealingLR), plateau (ReduceLROnPlateau)
+# warmup_epochs: 20  # Warmup epochs (increased from 10 for better stability when training from scratch)
+# anneal_max_epochs: ${max_epochs}  # Max epochs for anneal scheduler (usually same as max_epochs)
 
 # Plateau scheduler
-# scheduler: plateau
-# plateau_factor: 0.5
-# plateau_patience: 6        # Wait 6 epochs before reducing
-# plateau_min_lr: 1e-6
-# warmup_epochs: 30        # Warmup 30 epochs
-# Monitor: eval.val.rmsle (already configured)
+scheduler: plateau
+plateau_factor: 0.5
+plateau_patience: 6        # Wait 6 epochs before reducing
+plateau_min_lr: 1e-6
+warmup_epochs: 30        # Warmup 30 epochs
+Monitor: eval.val.rmsle (already configured)
 
 # Training stability
 gradient_clip_val: 1.0  # Gradient clipping value (clip gradients to prevent explosion)
