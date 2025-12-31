@@ -411,7 +411,7 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     metric_key = f'finetune.val.{hparams.eval_metric}'
     # Format: checkpoint_best_{metric}_{epoch:02d}_{metric_value:.4f}
     # Use double braces {{ }} so PyTorch Lightning can format them
-    callbacks.append(ModelCheckpoint(
+    checkpoint_callback = ModelCheckpoint(
         monitor=metric_key,
         mode=mode,
         filename=f'checkpoint_best_{hparams.eval_metric}_{{epoch:02d}}_{{{metric_key}:.4f}}',
@@ -419,7 +419,8 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
         save_top_k=1,  # Only keep the best checkpoint
         auto_insert_metric_name=False,
         verbose=True
-    ))
+    )
+    callbacks.append(checkpoint_callback)
     # Also save last epoch checkpoint (similar to pretraining)
     callbacks.append(ModelCheckpoint(
         filename='checkpoint_last_epoch_{epoch:02d}',
@@ -487,13 +488,15 @@ def _finetune_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     eval_df = pd.DataFrame(eval_results, index=[0])
     eval_df.to_csv(join(logdir, 'eval_results.csv'), index=False)
     
-    # Log best validation score
-    best_score = getattr(model, 'best_val_score', None)
-    if best_score is None:
-        # Try to get from callback metrics
-        metric_key = f'finetune.val.{hparams.eval_metric}'
-        if metric_key in trainer.callback_metrics:
-            best_score = trainer.callback_metrics[metric_key].item()
+    # Get best validation score from ModelCheckpoint callback (it already knows the best score)
+    metric_key = f'finetune.val.{hparams.eval_metric}'
+    best_score = None
+    for callback in trainer.callbacks:
+        if isinstance(callback, ModelCheckpoint) and callback.monitor == metric_key:
+            best_score = callback.best_model_score
+            if best_score is not None and isinstance(best_score, torch.Tensor):
+                best_score = best_score.item()
+            break
     
     # Check if best_score is valid (not inf or nan)
     if best_score is not None and best_score != float('inf') and best_score == best_score:  # best_score == best_score checks for NaN

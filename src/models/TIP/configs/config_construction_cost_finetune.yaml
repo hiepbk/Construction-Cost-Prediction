@@ -176,7 +176,7 @@ num_classes: 1
 
 regression_head:
   type: MultiTaskCountryAwareRegression
-  p: 0.2
+  p: 0.4  # Dropout increased from 0.3 to 0.4 for stronger regularization against overfitting
   n_hidden: 2048
   num_queries: 1      # learnable queries (1–4 typical)
   num_heads: 8        # attention heads for query pooling
@@ -184,11 +184,15 @@ regression_head:
     rmsle:
       self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
       global_weight: 0.8  # Weight for contribution to total loss (percentage/contribution)
-    mse:
-      self_weight: 0.01  # Weight to multiply raw loss (for normalization, user manually tunes)
-      global_weight: 0.1  # Weight for contribution to total loss (percentage/contribution)
-    classification_ce:  # Classification loss (same format as other losses)
+    # mse:
+    #   self_weight: 100.0  # Weight to multiply raw loss (for normalization, user manually tunes)
+    #   global_weight: 0.1  # Weight for contribution to total loss (percentage/contribution)
+    huber:
       self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
+      global_weight: 0.1  # Weight for contribution to total loss (percentage/contribution)
+
+    classification_ce:  # Classification loss (same format as other losses)
+      self_weight: 10.0  # Weight to multiply raw loss (for normalization, user manually tunes)
       global_weight: 0.1  # Weight for contribution to total loss (percentage/contribution)
   
   # Country-specific target statistics (if provided, enables country-specific normalization)
@@ -207,9 +211,9 @@ regression_head:
 batch_size: 32
 lr: 3e-4  # Pretrain LR (not used in fine-tuning, but required by run.py)
 weight_decay: 1e-5  # Pretrain weight decay (not used in fine-tuning, but required by run.py)
-lr_finetune: 1e-4  # Fine-tuning learning rate (reduced from 1e-4 for better convergence)
-weight_decay_finetune: 1e-5  # Fine-tuning weight decay
-regressor_lr_multiplier: 5.0  # Multiplier for regression head LR (reduced from 10.0 to 5.0 for better convergence)
+lr_finetune: 3e-5  # Fine-tuning learning rate (reduced from 5e-5 to 3e-5 for better generalization)
+weight_decay_finetune: 1e-4  # Fine-tuning weight decay (increased from 5e-5 to 1e-4 for stronger regularization)
+regressor_lr_multiplier: 2.5  # Multiplier for regression head LR (reduced from 3.0 to 2.5, effective LR = 7.5e-5)
 max_epochs: 200
 log_every_n_steps: 1  # Log every step (since we have small number of batches ~13)
 
@@ -221,9 +225,9 @@ log_every_n_steps: 1  # Log every step (since we have small number of batches ~1
 # Plateau scheduler
 scheduler: plateau
 plateau_factor: 0.5
-plateau_patience: 6        # Wait 6 epochs before reducing
+plateau_patience: 8        # Wait 8 epochs before reducing (balanced: not too aggressive, but responsive to plateaus)
 plateau_min_lr: 1e-6
-warmup_epochs: 30        # Warmup 30 epochs
+warmup_epochs: 15        # Warmup 15 epochs (reduced from 30 for faster convergence)
 Monitor: eval.val.rmsle (already configured)
 
 # Training stability

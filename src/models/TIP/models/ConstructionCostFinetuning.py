@@ -60,6 +60,7 @@ class ConstructionCostFinetuning(pl.LightningModule):
         
         # Store validation losses from head for epoch-end aggregation
         self.val_losses = []  # List of loss_dicts from each validation batch
+        # Note: train_losses not needed - we use trainer.callback_metrics for logged values
         
         # Track predictions for WandB logging (like pretraining)
         self.tracked_val_preds = {}  # Dict: {data_id: prediction_value}
@@ -165,6 +166,9 @@ class ConstructionCostFinetuning(pl.LightningModule):
             if loss_name == 'rmsle':
                 self.log('train_rmsle', loss_value, on_epoch=True, on_step=False, prog_bar=True, logger=False, sync_dist=True, batch_size=batch_size)
         
+        # Note: Losses are automatically logged and aggregated by PyTorch Lightning
+        # No need to store manually - we'll read from trainer.callback_metrics
+        
         # Log country classification accuracy (if multi-task head)
         if 'classification_ce' in loss_dict and country_gt is not None:
             # Get predicted country from classification logits
@@ -176,11 +180,29 @@ class ConstructionCostFinetuning(pl.LightningModule):
         
         return loss
     
-    def training_epoch_end(self, _) -> None:
-        """Reset metrics after training epoch (not used for training, but kept for compatibility)"""
-        # Training metrics are not calculated manually anymore (head handles losses)
-        # But we keep this method for compatibility
+    def on_train_epoch_start(self) -> None:
+        """Reset at the start of each training epoch"""
         pass
+    
+    def training_epoch_end(self, _) -> None:
+        """Print training losses after each training epoch"""
+        # Use already-logged metrics from PyTorch Lightning (already synced and aggregated)
+        if self.trainer.is_global_zero:
+            callback_metrics = self.trainer.callback_metrics
+            
+            # Get logged training losses (already mean and synced)
+            train_rmsle = callback_metrics.get('finetune.train.rmsle', callback_metrics.get('finetune.train.rmsle_raw', torch.tensor(0.0)))
+            train_mse = callback_metrics.get('finetune.train.mse', callback_metrics.get('finetune.train.mse_raw', torch.tensor(0.0)))
+            train_classif = callback_metrics.get('finetune.train.classification_ce', torch.tensor(0.0))
+            train_total = callback_metrics.get('finetune.train.total', callback_metrics.get('finetune.train.loss', torch.tensor(0.0)))
+            
+            # Convert to float if tensor
+            train_rmsle = train_rmsle.item() if isinstance(train_rmsle, torch.Tensor) else train_rmsle
+            train_mse = train_mse.item() if isinstance(train_mse, torch.Tensor) else train_mse
+            train_classif = train_classif.item() if isinstance(train_classif, torch.Tensor) else train_classif
+            train_total = train_total.item() if isinstance(train_total, torch.Tensor) else train_total
+            
+            print(f"\n  train_rmsle={train_rmsle:.3f}, train_mse={train_mse:.3f}, train_classif={train_classif:.3f}, train_total={train_total:.3f}")
     
     def validation_step(self, batch: Tuple, _) -> None:
         """Validation step"""
@@ -269,6 +291,8 @@ class ConstructionCostFinetuning(pl.LightningModule):
                         self.tracked_val_classification_targets[str(did)] = int(country_gt[idx].cpu().detach().item())
         
         # Store loss_dict for epoch-end aggregation (head already calculated all losses)
+        # Store validation losses for computing aggregated metrics (rmsle, mae, rmse from raw losses)
+        # Note: Individual losses are also logged and can be read from trainer.callback_metrics
         self.val_losses.append({k: v.detach().cpu() for k, v in loss_dict.items()})
         
         # Log losses from head (already calculated) - PyTorch Lightning will aggregate automatically
@@ -395,6 +419,24 @@ class ConstructionCostFinetuning(pl.LightningModule):
         else:
             # Default to MAE
             self.best_val_score = self.best_val_mae
+        
+        # Print validation losses after validation epoch (use already-logged metrics)
+        if self.trainer.is_global_zero:
+            callback_metrics = self.trainer.callback_metrics
+            
+            # Get logged validation losses (already mean and synced)
+            val_rmsle = callback_metrics.get('finetune.val.rmsle', torch.tensor(rmsle_val))
+            val_mse = callback_metrics.get('finetune.val.mse', callback_metrics.get('finetune.val.mse_raw', torch.tensor(0.0)))
+            val_classif = callback_metrics.get('finetune.val.classification_ce', torch.tensor(0.0))
+            val_total = callback_metrics.get('finetune.val.total', callback_metrics.get('finetune.val.loss', torch.tensor(0.0)))
+            
+            # Convert to float if tensor
+            val_rmsle = val_rmsle.item() if isinstance(val_rmsle, torch.Tensor) else val_rmsle
+            val_mse = val_mse.item() if isinstance(val_mse, torch.Tensor) else val_mse
+            val_classif = val_classif.item() if isinstance(val_classif, torch.Tensor) else val_classif
+            val_total = val_total.item() if isinstance(val_total, torch.Tensor) else val_total
+            
+            print(f"\n  val_rmsle={val_rmsle:.3f}, val_mse={val_mse:.3f}, val_classif={val_classif:.3f}, val_total={val_total:.3f}")
         
         # Reset tracking for next epoch
         self.tracked_val_preds = {}

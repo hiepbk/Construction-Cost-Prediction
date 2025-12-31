@@ -341,8 +341,7 @@ def run_inference(
         
         if rank == 0:
             print()  # New line after progress
-            print()  # New line after progress
-    
+        
     # Gather predictions from all GPUs if running in distributed mode
     if is_distributed:
         all_predictions = _gather_tensors(all_predictions, world_size)
@@ -454,25 +453,46 @@ def run_evaluation(args):
     # The head's forward() returns prediction_original which is already in USD/m² scale
     target_mean = None
     target_std = None
+    target_mean_by_country = None
+    target_std_by_country = None
+    head_type = None
+    
     # Check if regression_head config exists (new nested format)
     if hasattr(hparams, 'regression_head') and isinstance(hparams.regression_head, (dict, DictConfig)):
         regression_head = hparams.regression_head
         if isinstance(regression_head, DictConfig):
             regression_head = OmegaConf.to_container(regression_head, resolve=True)
-        target_mean = float(regression_head.get('target_mean', 0.0))
-        target_std = float(regression_head.get('target_std', 1.0))
+        head_type = regression_head.get('type', None)
+        
+        # Check for country-specific stats (MultiTaskCountryAwareRegression)
+        if 'target_mean_by_country' in regression_head and 'target_std_by_country' in regression_head:
+            target_mean_by_country = regression_head.get('target_mean_by_country', {})
+            target_std_by_country = regression_head.get('target_std_by_country', {})
+            # Convert DictConfig to dict if needed
+            if isinstance(target_mean_by_country, DictConfig):
+                target_mean_by_country = OmegaConf.to_container(target_mean_by_country, resolve=True)
+            if isinstance(target_std_by_country, DictConfig):
+                target_std_by_country = OmegaConf.to_container(target_std_by_country, resolve=True)
+        else:
+            # Fallback to global stats
+            target_mean = float(regression_head.get('target_mean', 0.0))
+            target_std = float(regression_head.get('target_std', 1.0))
     # Fallback to flat hparams (old format)
     elif hasattr(hparams, 'target_mean') and hasattr(hparams, 'target_std'):
         target_mean = float(hparams.target_mean)
         target_std = float(hparams.target_std)
-    else:
-        target_mean = None
-        target_std = None
     
     # Display model info
     print(f"Model initialized (from checkpoint):")
     print(f"  Embedding dim: {hparams.multimodal_embedding_dim}")
-    if target_mean is not None and target_std is not None:
+    if target_mean_by_country is not None and target_std_by_country is not None:
+        print(f"  Head type: {head_type} (using country-specific normalization)")
+        print(f"  Country-specific target statistics:")
+        for country_id in sorted(target_mean_by_country.keys()):
+            mean_val = target_mean_by_country[country_id]
+            std_val = target_std_by_country[country_id]
+            print(f"    Country {country_id}: mean={mean_val:.4f}, std={std_val:.4f}")
+    elif target_mean is not None and target_std is not None:
         print(f"  Target mean: {target_mean:.4f} (from checkpoint - head uses this internally)")
         print(f"  Target std: {target_std:.4f} (from checkpoint - head uses this internally)")
     else:
@@ -498,7 +518,14 @@ def run_evaluation(args):
     # NOTE: Target normalization is handled internally by the head
     # The head's forward() method returns prediction_original which is already decoded to USD/m²
     # No additional processing needed in evaluation pipeline
-    if target_mean is not None and target_std is not None:
+    if target_mean_by_country is not None and target_std_by_country is not None:
+        print(f"\n✅ Head loaded with country-specific target normalization from checkpoint:")
+        for country_id in sorted(target_mean_by_country.keys()):
+            mean_val = target_mean_by_country[country_id]
+            std_val = target_std_by_country[country_id]
+            print(f"   Country {country_id}: mean={mean_val:.4f}, std={std_val:.4f} (used internally by head for decoding)")
+        print(f"   Predictions are already in original scale (USD/m²) - no additional decoding needed")
+    elif target_mean is not None and target_std is not None:
         print(f"\n✅ Head loaded with target normalization from checkpoint:")
         print(f"   Target mean: {target_mean:.4f} (used internally by head for decoding)")
         print(f"   Target std: {target_std:.4f} (used internally by head for decoding)")
