@@ -62,9 +62,26 @@ def run(args: DictConfig):
   base_dir = os.path.dirname(os.path.dirname(os.path.dirname(base_dir)))
   base_dir = os.path.join(base_dir, 'work_dir')
   
-  # exp_name from config can already include head name via interpolation: tip_pretrain_${regression_head.type}
-  # Add timestamp for WandB experiment name
-  exp_name = f'{args.exp_name}_{now.strftime("%m%d_%H%M")}'
+  # Construct exp_name: use construction_cost_head.type from config
+  base_exp_name = args.exp_name
+  
+  # Get head type from construction_cost_head config
+  head_type = None
+  if hasattr(args, 'construction_cost_head') and args.construction_cost_head is not None:
+    # DictConfig supports both .get() and attribute access
+    if isinstance(args.construction_cost_head, DictConfig):
+      head_type = args.construction_cost_head.get('type', None)
+    elif isinstance(args.construction_cost_head, dict):
+      head_type = args.construction_cost_head.get('type', None)
+    elif hasattr(args.construction_cost_head, 'type'):
+      head_type = args.construction_cost_head.type
+  
+  # Add head type to exp_name if found and not already present
+  if head_type and head_type not in base_exp_name:
+    base_exp_name = f'{base_exp_name}_{head_type}'
+  
+  # Add timestamp
+  exp_name = f'{base_exp_name}_{now.strftime("%m%d_%H%M")}'
   if args.use_wandb:
     if args.resume_training and args.wandb_id:
       wandb_logger = WandbLogger(name=exp_name, project=args.wandb_project, entity=args.wandb_entity, save_dir=base_dir, offline=args.offline, id=args.wandb_id, resume='allow')

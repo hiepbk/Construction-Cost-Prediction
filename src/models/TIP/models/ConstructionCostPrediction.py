@@ -64,10 +64,22 @@ class ConstructionCostPrediction(nn.Module):
                 checkpoint_dict = OmegaConf.to_container(checkpoint_hparams, resolve=True)
                 finetune_dict = OmegaConf.to_container(hparams, resolve=True)
                 
+                # Check if current config has a head config (construction_cost_head)
+                # IMPORTANT: Check BEFORE merging to see if original config has a head config
+                # If so, don't merge head config from checkpoint (current config takes precedence)
+                has_construction_cost_head = (
+                    'construction_cost_head' in finetune_dict and 
+                    finetune_dict.get('construction_cost_head') is not None
+                )
+                
                 # Copy only missing keys from checkpoint (hparams takes precedence)
                 for key, value in checkpoint_dict.items():
                     if key == 'checkpoint':
                         continue  # Skip checkpoint path
+                    # Skip head config keys if current config already has a head config
+                    if has_construction_cost_head and key == 'construction_cost_head':
+                        print(f"ℹ️  Skipping merge of '{key}' from checkpoint - using current config's head instead")
+                        continue  # Don't merge head config from checkpoint - use current config's head
                     if key not in finetune_dict:
                         setattr(hparams, key, value)
             
@@ -149,6 +161,23 @@ class ConstructionCostPrediction(nn.Module):
         # Optionally try to load weights from checkpoint (if available and head class matches)
         if is_finetune_checkpoint:
             # Fine-tuning checkpoint: Extract head weights from state_dict
+            # First, check if checkpoint's head type matches current config's head type
+            checkpoint_hparams = checkpoint.get('hyper_parameters', {})
+            checkpoint_head_type = None
+            
+            # Try to get head type from checkpoint hyperparameters
+            if hasattr(checkpoint_hparams, 'construction_cost_head'):
+                checkpoint_head_config = checkpoint_hparams.construction_cost_head
+                if isinstance(checkpoint_head_config, DictConfig):
+                    checkpoint_head_config = OmegaConf.to_container(checkpoint_head_config, resolve=True)
+                checkpoint_head_type = checkpoint_head_config.get('type', None) if isinstance(checkpoint_head_config, dict) else None
+            
+            # Check if head types match
+            if checkpoint_head_type and checkpoint_head_type.lower() != current_head_type.lower():
+                print(f"ℹ️  NOTE: Fine-tuning checkpoint used '{checkpoint_head_type}' head, but current config uses '{current_head_type}' head.")
+                print(f"   Skipping head weight loading - using new '{current_head_type}' head from config (random initialization).")
+                return  # Skip loading - head types don't match
+            
             print("Loading regression head weights from fine-tuning checkpoint state_dict...")
             state_dict = checkpoint['state_dict']
             
@@ -173,58 +202,76 @@ class ConstructionCostPrediction(nn.Module):
         else:
             # Pretraining checkpoint: Head is in callback state (optional)
             if 'callbacks' in checkpoint:
-                # Find the SSLOnlineEvaluatorRegression callback state
+                # Find the SSLOnlineEvaluatorRegression or SSLOnlineEvaluatorClassification callback state
+                callback_state = None
+                callback_head_class = None
                 for key in checkpoint['callbacks'].keys():
-                    if 'SSLOnlineEvaluatorRegression' in key or 'ssl_online_regression' in key.lower():
+                    if ('SSLOnlineEvaluatorRegression' in key or 
+                        'SSLOnlineEvaluatorClassification' in key or
+                        'ssl_online_regression' in key.lower() or 
+                        'ssl_online_construction_cost' in key.lower() or
+                        'ssl_online_classification' in key.lower()):
                         callback_state = checkpoint['callbacks'][key]
-                        if 'state_dict' in callback_state:
-                            # Get head class name from callback state (what was used in pretraining)
-                            callback_head_class = callback_state.get('regression_head_class', None)
-                            if callback_head_class is None:
-                                print(f"⚠️  Warning: No regression head class found in pretraining checkpoint callback state")
-                                print(f"   Continuing with random initialization for '{current_head_type}' head.")
-                                return  # Done (either loaded or skipped)
-                            print(f"✅ Found online regression head class in pretraining checkpoint: {callback_head_class}")
-                            print(f"   Current head type: {current_head_type}")
-                            
-                            # Check if checkpoint's head class exactly matches current config's head class
-                            if callback_head_class.lower() == current_head_type.lower():
-                                # Head types match - try to load weights
-                                try:
-                                    self.regression.load_state_dict(callback_state['state_dict'])
-                                    print("✅ Loaded trained regression head from pretraining checkpoint")
-                                except Exception as e:
-                                    print(f"⚠️  Warning: Could not load regression head weights (dimension mismatch): {e}")
-                                    print(f"   Continuing with random initialization for '{current_head_type}' head.")
-                            else:
-                                # Head types don't match - don't load weights, use new head from scratch
-                                print(f"ℹ️  NOTE: Pretraining checkpoint used '{callback_head_class}' head, but fine-tuning uses '{current_head_type}' head.")
-                                print(f"   This is expected when changing head architectures (e.g., RegressionMLP → MixtureOfExpertsRegression).")
-                                print(f"   ✅ TIP backbone weights loaded successfully - this is the most important part.")
-                                print(f"   ℹ️  Starting fine-tuning with new '{current_head_type}' head (random initialization).")
-                            return  # Done (either loaded or skipped)
+                        # Try to get head class from callback state (could be regression_head_class or classification_head_class)
+                        callback_head_class = callback_state.get('regression_head_class', None) or callback_state.get('classification_head_class', None)
+                        if callback_head_class:
+                            break  # Found a callback with head class info
+                
+                if callback_state and 'state_dict' in callback_state:
+                    if callback_head_class is None:
+                        print(f"⚠️  Warning: No head class found in pretraining checkpoint callback state")
+                        print(f"   Continuing with random initialization for '{current_head_type}' head.")
+                        return  # Done (either loaded or skipped)
+                    
+                    print(f"✅ Found online head class in pretraining checkpoint: {callback_head_class}")
+                    print(f"   Current head type: {current_head_type}")
+                    
+                    # Check if checkpoint's head class exactly matches current config's head class
+                    if callback_head_class.lower() == current_head_type.lower():
+                        # Head types match - try to load weights
+                        try:
+                            self.regression.load_state_dict(callback_state['state_dict'])
+                            print("✅ Loaded trained head from pretraining checkpoint")
+                        except Exception as e:
+                            print(f"⚠️  Warning: Could not load head weights (dimension mismatch): {e}")
+                            print(f"   Continuing with random initialization for '{current_head_type}' head.")
+                    else:
+                        # Head types don't match - skip loading, use new head from scratch
+                        print(f"ℹ️  NOTE: Pretraining checkpoint used '{callback_head_class}' head, but current config uses '{current_head_type}' head.")
+                        print(f"   Skipping head weight loading - using new '{current_head_type}' head from config (random initialization).")
+                        print(f"   ✅ TIP backbone weights loaded successfully - this is the most important part.")
+                    return  # Done (either loaded or skipped)
             
             # If no callback state found, head is already created from config (random init)
-            print(f"ℹ️  No regression head found in pretraining checkpoint callback state")
+            print(f"ℹ️  No head found in pretraining checkpoint callback state")
             print(f"   Using '{current_head_type}' head initialized from config (random weights)")
     
     def _build_head_config(self, hparams) -> Dict:
-        """Get head_config dict directly from hparams.regression_head (no fallback)."""
-        # Get regression_head dict from hparams
-        if not (hasattr(hparams, 'regression_head') or 'regression_head' in hparams):
-            raise ValueError("hparams must contain 'regression_head' dict with all head configuration")
+        """Get head_config dict from hparams.construction_cost_head."""
+        # IMPORTANT: Only use construction_cost_head (standard name)
+        head_config = None
         
-        head_config = getattr(hparams, 'regression_head', hparams.get('regression_head', {}))
+        # Check for construction_cost_head (standard name, used in checkpoints and configs)
+        if hasattr(hparams, 'construction_cost_head') and getattr(hparams, 'construction_cost_head', None) is not None:
+            head_config = getattr(hparams, 'construction_cost_head', None)
+        elif 'construction_cost_head' in hparams and hparams.get('construction_cost_head') is not None:
+            head_config = hparams.get('construction_cost_head')
+        
+        if head_config is None:
+            raise ValueError("hparams must contain 'construction_cost_head' dict with all head configuration")
+        
         if isinstance(head_config, DictConfig):
             head_config = OmegaConf.to_container(head_config, resolve=True)
         
+        print(f"ℹ️  Using head config from: construction_cost_head")
+        
         if not isinstance(head_config, dict):
-            raise ValueError(f"regression_head must be a dict, got {type(head_config)}")
+            raise ValueError(f"construction_cost_head must be a dict, got {type(head_config)}")
         
         if 'type' not in head_config:
-            raise ValueError("regression_head must contain 'type' key specifying head class name")
+            raise ValueError("construction_cost_head must contain 'type' key specifying head class name")
         
-        # Return as-is (all parameters should be in regression_head, no defaults)
+        # Return as-is (all parameters should be in construction_cost_head, no defaults)
         return head_config.copy()
     
     def _create_head_from_hparams(self, hparams):

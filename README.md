@@ -492,28 +492,6 @@ The training script uses Hydra configuration system. All parameters are defined 
 1. ✅ Run preprocessing and added `target_mean` and `target_std` to the config file
 2. ✅ Set up WandB (if using) with your project and entity names
 
-#### Basic Training (Uses Default Config)
-
-```bash
-conda activate ccp
-cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
-python run.py
-```
-
-#### Training with Custom Parameters
-
-You can override any config parameter via command-line:
-
-```bash
-conda activate ccp
-cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
-python run.py \
-    batch_size=32 \
-    max_epochs=100 \
-    lr=3e-4 \
-    pretrain=True
-```
-
 #### Recommended Training Command
 
 ```bash
@@ -522,6 +500,8 @@ cd /hdd/hiep/CODE/Construction_Cost_Prediction/src/models/TIP
 
 
 python -u run.py pretrain=True
+
+
 ```
 All pretrained models are automatically downloaded when first used.
 

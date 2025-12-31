@@ -10,6 +10,7 @@ import random
 import copy
 import os
 from pathlib import Path
+import pickle
 
 import torch
 from torch.utils.data import Dataset
@@ -212,7 +213,7 @@ class ConstructionCostTIPDataset(Dataset):
                 metadata_path = None
         
         if os.path.exists(metadata_path):
-            import pickle
+
             with open(metadata_path, 'rb') as f:
                 metadata = pickle.load(f)
             

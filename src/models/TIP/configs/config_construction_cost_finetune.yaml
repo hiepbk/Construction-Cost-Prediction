@@ -23,7 +23,7 @@ target: construction_cost  # Required by run.py (for logging and exp name)
 data_base: /hdd/hiep/CODE/Construction_Cost_Prediction
 
 # Checkpoint from pretraining
-checkpoint: /hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/pretrain/MultiTaskCountryAwareRegression_1230_1040/checkpoint_last_epoch_99.ckpt
+checkpoint: /hdd/hiep/CODE/Construction_Cost_Prediction/work_dir/runs/pretrain/CountryAwareClassification_1231_1348/checkpoint_last_epoch_99.ckpt
 
 # Data paths (absolute paths)
 # Note: For fine-tuning, we need ground truth, so we use train/val splits (NOT test set)
@@ -62,7 +62,7 @@ finetune_strategy: frozen  # Freeze entire pretrained backbone (image + tabular 
 freeze_image: true  # Freeze image encoder (redundant if finetune_strategy=frozen, but kept for clarity)
 freeze_tabular: true  # Freeze tabular encoder (redundant if finetune_strategy=frozen, but kept for clarity)
 missing_tabular: false
-# Note: Only the regression head (classifier) will be trained when finetune_strategy=frozen
+# Note: Only the construction cost head (classifier) will be trained when finetune_strategy=frozen
 
 # Alternative: Unfreeze backbone for better convergence (commented out - can enable in future)
 # finetune_strategy: trainable  # Unfreeze backbone with lower LR for better convergence
@@ -72,12 +72,12 @@ missing_tabular: false
 #   - Multimodal encoder: lr_finetune (5e-5)
 #   - Tabular encoder: lr_finetune (5e-5) if freeze_tabular=false
 #   - Image encoder: frozen (freeze_image=true)
-#   - Regression head: lr_finetune * 5 (2.5e-4)
+#   - Construction cost head: lr_finetune * 5 (2.5e-4)
 
-# Regression Head
+# Construction Cost Head
 num_classes: 1
-# Regression Head Configuration (all head-related parameters in one dict)
-# regression_head:
+# Construction Cost Head Configuration (all head-related parameters in one dict)
+# construction_cost_head:
 #   type: AttentionAggregationRegression  # Head class: RegressionMLP or AttentionAggregationRegression
 #   p: 0.2  # Dropout probability
 #   n_hidden: null  # Hidden dimension (null = use n_input, which is embedding_dim)
@@ -101,7 +101,7 @@ num_classes: 1
 #   # load_balancing_weight: 0.01  # Weight for load balancing loss
 
 
-# regression_head:
+# construction_cost_head:
 #   type: MixtureOfExpertsRegression  # Head class: RegressionMLP or MixtureOfExpertsRegression
 #   p: 0.2  # Dropout probability
 #   n_hidden: 2048  # Hidden dimension (null = use n_input, which is embedding_dim)
@@ -124,7 +124,7 @@ num_classes: 1
 #   load_balancing_weight: 0.01  # Weight for load balancing loss
 
 
-# regression_head:
+# construction_cost_head:
 #   type: RegressionMLP  # Head class name: RegressionMLP or MixtureOfExpertsRegression
 #   p: 0.2  # Dropout probability
 #   n_hidden: null  # Hidden dimension (null = use n_input, which is embedding_dim)
@@ -142,7 +142,7 @@ num_classes: 1
 #   huber_delta: 1.0  # Delta parameter for Huber loss
 
 
-# regression_head:
+# construction_cost_head:
 #   type: AttentionAggregationRegression  # Head class: RegressionMLP or AttentionAggregationRegression
 #   p: 0.2  # Dropout probability
 #   n_hidden: 2048  # Hidden dimension (null = use n_input, which is embedding_dim)
@@ -161,7 +161,7 @@ num_classes: 1
 #   huber_delta: 1.0  # Delta parameter for Huber loss
 
 # Example alternatives (commented out — enable one at a time when testing new heads)
-# regression_head:
+# construction_cost_head:
 #   type: QueryAttentionRegression
 #   p: 0.2
 #   n_hidden: 2048
@@ -174,7 +174,7 @@ num_classes: 1
 #   target_log_transform: true
 #   huber_delta: 1.0
 
-regression_head:
+construction_cost_head:
   type: MultiTaskCountryAwareRegression
   p: 0.4  # Dropout increased from 0.3 to 0.4 for stronger regularization against overfitting
   n_hidden: 2048
@@ -213,7 +213,7 @@ lr: 3e-4  # Pretrain LR (not used in fine-tuning, but required by run.py)
 weight_decay: 1e-5  # Pretrain weight decay (not used in fine-tuning, but required by run.py)
 lr_finetune: 3e-5  # Fine-tuning learning rate (reduced from 5e-5 to 3e-5 for better generalization)
 weight_decay_finetune: 1e-4  # Fine-tuning weight decay (increased from 5e-5 to 1e-4 for stronger regularization)
-regressor_lr_multiplier: 2.5  # Multiplier for regression head LR (reduced from 3.0 to 2.5, effective LR = 7.5e-5)
+regressor_lr_multiplier: 2.5  # Multiplier for construction cost head LR (reduced from 3.0 to 2.5, effective LR = 7.5e-5)
 max_epochs: 200
 log_every_n_steps: 1  # Log every step (since we have small number of batches ~13)
 
@@ -281,7 +281,7 @@ use_wandb: true  # Enable WandB online logging
 offline: false  # Set to false for online WandB logging
 wandb_entity: null  # Set to your WandB entity/username if needed
 wandb_id: null  # For resuming training
-exp_name: tip_finetune_${regression_head.type}  # WandB experiment name (will have timestamp added in code): tip_finetune_QueryAttentionRegression_1221_0245
+exp_name: tip_finetune_${construction_cost_head.type}  # WandB experiment name (will have timestamp added in code): tip_finetune_QueryAttentionRegression_1221_0245
 comment: "TIP fine-tuning for construction cost regression (frozen backbone)"
 
 # Automatic Evaluation (runs after fine-tuning completes)

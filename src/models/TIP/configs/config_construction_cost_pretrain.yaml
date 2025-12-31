@@ -31,16 +31,20 @@ data_trainval_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotati
 
 
 # for pretrain, we use full set to get all features over trainval
-data_train_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean.csv
+# data_train_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean.csv
 # data_train_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval/trainval_clean.csv
+data_train_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/traintest/traintest_clean.csv
 data_val_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean.csv
-train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean_metadata.pkl
+# train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/train/train_clean_metadata.pkl
 # train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval/trainval_clean_metadata.pkl
+train_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/traintest/traintest_clean_metadata.pkl
 val_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/val/val_clean_metadata.pkl
 
 # Common paths (used for both k-fold and fixed split)
 composite_dir_trainval: /hdd/hiep/CODE/Construction_Cost_Prediction/data/trainval_composite  # For train and val sets
+composite_dir_traintest: /hdd/hiep/CODE/Construction_Cost_Prediction/data/traintest_composite  # For traintest set
 composite_dir_test: /hdd/hiep/CODE/Construction_Cost_Prediction/data/test_composite  # For test set
+
 field_lengths_tabular: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/field_lengths.pt
 trainval_metadata_path: /hdd/hiep/CODE/Construction_Cost_Prediction/data/annotation/trainval/trainval_clean_metadata.pkl  # Metadata for unified trainval (used if use_kfold=true)
 labels_train: null  # Will be auto-generated
@@ -132,7 +136,7 @@ use_wandb: true  # Enable WandB online logging
 offline: false  # Set to false for online WandB logging
 wandb_entity: null  # Set to your WandB entity/username if needed
 wandb_id: null  # For resuming training
-exp_name: tip_pretrain_${regression_head.type}  # WandB experiment name (will have timestamp added in code): tip_pretrain_QueryAttentionRegression_1221_0245
+exp_name: tip_pretrain  # WandB experiment name (head type will be added automatically in code, then timestamp): tip_pretrain_MultiTaskCountryAwareRegression_1221_0245
 target: construction_cost  # For logging/display purposes only
 comment: "TIP pretraining for construction cost prediction"
 seed: 42
@@ -229,33 +233,33 @@ num_classes: 1  # For regression
 
 
 
-regression_head:
-  type: MultiTaskCountryAwareRegression
-  p: 0.2
-  n_hidden: 2048
-  num_queries: 1      # learnable queries (1–4 typical)
-  num_heads: 8        # attention heads for query pooling
-  loss_type:
-    rmsle:
-      self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
-      global_weight: 0.8  # Weight for contribution to total loss (percentage/contribution)
-    mse:
-      self_weight: 0.01  # Weight to multiply raw loss (for normalization, user manually tunes)
-      global_weight: 0.1  # Weight for contribution to total loss (percentage/contribution)
-    classification_ce:  # Classification loss (same format as other losses)
-      self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
-      global_weight: 0.1  # Weight for contribution to total loss (percentage/contribution)
+# regression_head:
+#   type: MultiTaskCountryAwareRegression
+#   p: 0.2
+#   n_hidden: 2048
+#   num_queries: 1      # learnable queries (1–4 typical)
+#   num_heads: 8        # attention heads for query pooling
+#   loss_type:
+#     rmsle:
+#       self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
+#       global_weight: 0.8  # Weight for contribution to total loss (percentage/contribution)
+#     mse:
+#       self_weight: 0.01  # Weight to multiply raw loss (for normalization, user manually tunes)
+#       global_weight: 0.1  # Weight for contribution to total loss (percentage/contribution)
+#     classification_ce:  # Classification loss (same format as other losses)
+#       self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
+#       global_weight: 0.1  # Weight for contribution to total loss (percentage/contribution)
   
-  # Country-specific target statistics (if provided, enables country-specific normalization)
-  # Format: {country_id: value} where country_id is 0 or 1
-  target_mean_by_country:
-    0: 7.478149  # Mean of log(1 + target) for country 0
-    1: 5.304986  # Mean of log(1 + target) for country 1
-  target_std_by_country:
-    0: 0.138897  # Std of log(1 + target) for country 0
-    1: 0.283889  # Std of log(1 + target) for country 1
+#   # Country-specific target statistics (if provided, enables country-specific normalization)
+#   # Format: {country_id: value} where country_id is 0 or 1
+#   target_mean_by_country:
+#     0: 7.478149  # Mean of log(1 + target) for country 0
+#     1: 5.304986  # Mean of log(1 + target) for country 1
+#   target_std_by_country:
+#     0: 0.138897  # Std of log(1 + target) for country 0
+#     1: 0.283889  # Std of log(1 + target) for country 1
   
-  huber_delta: 1.0
+#   huber_delta: 1.0
 #
 # regression_head:
 #   type: GatedAttentionPoolingRegression
@@ -293,6 +297,51 @@ regression_head:
 #     0: 0.138897
 #     1: 0.283889
 #   huber_delta: 1.0
+
+# construction_cost_head: Unified head configuration (replaces regression_head/classification_head)
+# The 'type' field determines which head class to use (from ConstructionCostHead.py)
+# Head types ending with 'Regression' use SSLOnlineEvaluatorRegression callback
+# Head types ending with 'Classification' use SSLOnlineEvaluatorClassification callback
+
+# MultiTaskCountryAwareRegression (commented out - use simpler head below)
+# construction_cost_head:
+#   type: MultiTaskCountryAwareRegression  # Head class name (must match a class in ConstructionCostHead.py)
+#   p: 0.2
+#   n_hidden: 2048
+#   num_queries: 1      # learnable queries (1–4 typical)
+#   num_heads: 8        # attention heads for query pooling
+#   loss_type:
+#     rmsle:
+#       self_weight: 10.0  # Weight to multiply raw loss (for normalization, user manually tunes)
+#       global_weight: 0.5  # Weight for contribution to total loss (percentage/contribution)
+#     classification_ce:  # Classification loss (same format as other losses)
+#       self_weight: 1000.0  # Weight to multiply raw loss (for normalization, user manually tunes)
+#       global_weight: 0.5  # Weight for contribution to total loss (percentage/contribution)
+#   
+#   # Country-specific target statistics (required for MultiTaskCountryAwareRegression)
+#   # Format: {country_id: value} where country_id is 0 or 1
+#   target_mean_by_country:
+#     0: 7.478149  # Mean of log(1 + target) for country 0
+#     1: 5.304986  # Mean of log(1 + target) for country 1
+#   target_std_by_country:
+#     0: 0.138897  # Std of log(1 + target) for country 0
+#     1: 0.283889  # Std of log(1 + target) for country 1
+#   
+#   huber_delta: 1.0
+
+# CountryAwareClassification: Classification head for country prediction
+# Used for monitoring representation quality during pretraining on traintest dataset
+# (where test samples have fake ground truth 0.0, so regression is not meaningful)
+construction_cost_head:
+  type: CountryAwareClassification  # Head class name (must match a class in ConstructionCostHead.py)
+  p: 0.2
+  n_hidden: 2048
+  num_heads: 8        # attention heads for aggregation
+  num_countries: 2    # Number of country classes
+  loss_type:
+    classification_ce:  # Classification cross-entropy loss
+      self_weight: 1.0  # Weight to multiply raw loss (for normalization, user manually tunes)
+      global_weight: 1.0  # Weight for contribution to total loss (percentage/contribution)
 
 eval_metric: rmsle  # Metric to monitor for best checkpoint (rmsle, mae, rmse) - rmsle is primary
 limit_train_batches: null

@@ -121,7 +121,7 @@ def evaluate_validation(
     save_predictions: bool = True,
     output_dir: str = None,
     checkpoint_path: Optional[str] = None
-) -> dict:
+) -> Tuple[dict, torch.Tensor, list]:
     """
     Evaluate model on validation set.
     
@@ -457,17 +457,20 @@ def run_evaluation(args):
     target_std_by_country = None
     head_type = None
     
-    # Check if regression_head config exists (new nested format)
-    if hasattr(hparams, 'regression_head') and isinstance(hparams.regression_head, (dict, DictConfig)):
-        regression_head = hparams.regression_head
-        if isinstance(regression_head, DictConfig):
-            regression_head = OmegaConf.to_container(regression_head, resolve=True)
-        head_type = regression_head.get('type', None)
+    # Check if construction_cost_head config exists
+    construction_cost_head = None
+    if hasattr(hparams, 'construction_cost_head') and isinstance(hparams.construction_cost_head, (dict, DictConfig)):
+        construction_cost_head = hparams.construction_cost_head
+    
+    if construction_cost_head is not None:
+        if isinstance(construction_cost_head, DictConfig):
+            construction_cost_head = OmegaConf.to_container(construction_cost_head, resolve=True)
+        head_type = construction_cost_head.get('type', None)
         
         # Check for country-specific stats (MultiTaskCountryAwareRegression)
-        if 'target_mean_by_country' in regression_head and 'target_std_by_country' in regression_head:
-            target_mean_by_country = regression_head.get('target_mean_by_country', {})
-            target_std_by_country = regression_head.get('target_std_by_country', {})
+        if 'target_mean_by_country' in construction_cost_head and 'target_std_by_country' in construction_cost_head:
+            target_mean_by_country = construction_cost_head.get('target_mean_by_country', {})
+            target_std_by_country = construction_cost_head.get('target_std_by_country', {})
             # Convert DictConfig to dict if needed
             if isinstance(target_mean_by_country, DictConfig):
                 target_mean_by_country = OmegaConf.to_container(target_mean_by_country, resolve=True)
@@ -475,8 +478,8 @@ def run_evaluation(args):
                 target_std_by_country = OmegaConf.to_container(target_std_by_country, resolve=True)
         else:
             # Fallback to global stats
-            target_mean = float(regression_head.get('target_mean', 0.0))
-            target_std = float(regression_head.get('target_std', 1.0))
+            target_mean = float(construction_cost_head.get('target_mean', 0.0))
+            target_std = float(construction_cost_head.get('target_std', 1.0))
     # Fallback to flat hparams (old format)
     elif hasattr(hparams, 'target_mean') and hasattr(hparams, 'target_std'):
         target_mean = float(hparams.target_mean)

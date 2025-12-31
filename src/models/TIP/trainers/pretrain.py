@@ -12,8 +12,7 @@ import numpy as np
 from sklearn.model_selection import StratifiedKFold
 
 from utils.utils import create_logdir
-from utils.ssl_online_custom import SSLOnlineEvaluator
-from utils.ssl_online_regression import SSLOnlineEvaluatorRegression
+from utils.ssl_online_construction_cost import SSLOnlineEvaluatorRegression, SSLOnlineEvaluatorClassification
 
 from datasets.ConstructionCostTIPDataset import ConstructionCostTIPDataset
 from models.MultimodalSimCLR import MultimodalSimCLR
@@ -124,7 +123,7 @@ def load_datasets(hparams, fold_index=None):
   
   train_dataset = ConstructionCostTIPDataset(
     csv_path=train_csv_path,
-    composite_dir=hparams.composite_dir_trainval,
+    composite_dir=hparams.composite_dir_traintest,
     field_lengths_tabular=hparams.field_lengths_tabular,
     labels_path=hparams.labels_train,
     img_size=hparams.img_size,
@@ -299,14 +298,24 @@ def _pretrain_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
   
   # Ensure target normalization stats are in hparams (will be saved in checkpoint via save_hyperparameters)
   # This ensures they are saved in the checkpoint for later use
-  if hparams.num_classes == 1:
-    from omegaconf import open_dict
-    with open_dict(hparams):
-      # Ensure these are set (they should already be from config, but make sure)
-      if not hasattr(hparams, 'target_mean'):
-        hparams.target_mean = 0.0
-      if not hasattr(hparams, 'target_std'):
-        hparams.target_std = 1.0
+  # Only relevant for regression tasks (when construction_cost_head type ends with 'Regression')
+  has_construction_cost_head = hasattr(hparams, 'construction_cost_head') or 'construction_cost_head' in hparams
+  if has_construction_cost_head:
+    # Check if head type is regression
+    construction_cost_head = getattr(hparams, 'construction_cost_head', hparams.get('construction_cost_head', {}))
+    if isinstance(construction_cost_head, DictConfig):
+      construction_cost_head = OmegaConf.to_container(construction_cost_head, resolve=True)
+    head_type = construction_cost_head.get('type', '').strip() if isinstance(construction_cost_head, dict) else ''
+    is_regression = head_type.endswith('Regression')
+    
+    if is_regression:
+      from omegaconf import open_dict
+      with open_dict(hparams):
+        # Ensure these are set (they should already be from config, but make sure)
+        if not hasattr(hparams, 'target_mean'):
+          hparams.target_mean = 0.0
+        if not hasattr(hparams, 'target_std'):
+          hparams.target_std = 1.0
   
   model = select_model(hparams, train_dataset)
   
@@ -316,59 +325,94 @@ def _pretrain_single_fold(hparams, wandb_logger, fold_index, base_logdir=None):
     model.hparams.classifier_freq = float('Inf')
     z_dim = hparams.multimodal_embedding_dim if hparams.strategy=='tip' else model.pooled_dim
     
-    # Use regression evaluator for regression tasks (num_classes=1)
-    if hparams.num_classes == 1:
-      # Get regression_head config directly from hparams (no fallback)
-      if not (hasattr(hparams, 'regression_head') or 'regression_head' in hparams):
-        raise ValueError("hparams must contain 'regression_head' dict with all head configuration")
-      
-      regression_head = getattr(hparams, 'regression_head', hparams.get('regression_head', {}))
-      if isinstance(regression_head, DictConfig):
-        regression_head = OmegaConf.to_container(regression_head, resolve=True)
-      
-      if not isinstance(regression_head, dict) or 'type' not in regression_head:
-        raise ValueError("regression_head must be a dict containing 'type' and all head parameters")
-      
+    # Get construction_cost_head config (required for online evaluation)
+    if not (hasattr(hparams, 'construction_cost_head') or 'construction_cost_head' in hparams):
+      raise ValueError("Must define 'construction_cost_head' in config for online evaluation.")
+    
+    construction_cost_head = getattr(hparams, 'construction_cost_head', hparams.get('construction_cost_head', {}))
+    if isinstance(construction_cost_head, DictConfig):
+      construction_cost_head = OmegaConf.to_container(construction_cost_head, resolve=True)
+    
+    if not isinstance(construction_cost_head, dict) or 'type' not in construction_cost_head:
+      raise ValueError("construction_cost_head must be a dict containing 'type' and all head parameters")
+    
+    # Determine head type from the 'type' field
+    head_type = construction_cost_head.get('type', '').strip()
+    
+    # Check if it's a regression or classification head based on type name
+    is_regression = head_type.endswith('Regression')
+    is_classification = head_type.endswith('Classification')
+    
+    if not is_regression and not is_classification:
+      raise ValueError(
+        f"Unknown head type '{head_type}'. "
+        f"Head type must end with 'Regression' or 'Classification'. "
+        f"Available types: see HEAD_REGISTRY in ConstructionCostHead.py"
+      )
+    
+    # Use appropriate callback based on head type
+    if is_regression:
       # Regression online evaluation
       callbacks.append(SSLOnlineEvaluatorRegression(
         z_dim=z_dim,
-        regression_head=regression_head,
+        regression_head=construction_cost_head,
         multimodal=(hparams.datatype=='multimodal'),
         strategy=hparams.strategy,
       ))
-    else:
+    elif is_classification:
       # Classification online evaluation
-      callbacks.append(SSLOnlineEvaluator(
+      callbacks.append(SSLOnlineEvaluatorClassification(
         z_dim=z_dim,
-        hidden_dim=hparams.embedding_dim,
-        num_classes=hparams.num_classes,
-        swav=False,
+        classification_head=construction_cost_head,
         multimodal=(hparams.datatype=='multimodal'),
-        strategy=hparams.strategy
+        strategy=hparams.strategy,
       ))
   # Save best checkpoint based on validation metric (lower is better)
-  # Only save best checkpoint if we have regression online evaluation enabled
-  if hparams.online_mlp and hparams.num_classes == 1:
-    # Get eval_metric from config (default to rmsle)
-    eval_metric = getattr(hparams, 'eval_metric', 'rmsle')
-    # Determine mode based on metric (lower is better for rmsle, mae, rmse)
-    if eval_metric in ['rmsle', 'mae', 'rmse']:
-      mode = 'min'  # Lower is better
-    else:
-      mode = 'min'  # Default to min (lower is better)
+  # Save checkpoints for both regression and classification heads
+  has_construction_cost_head = hasattr(hparams, 'construction_cost_head') or 'construction_cost_head' in hparams
+  if hparams.online_mlp and has_construction_cost_head:
+    # Check if head type is regression or classification
+    construction_cost_head = getattr(hparams, 'construction_cost_head', hparams.get('construction_cost_head', {}))
+    if isinstance(construction_cost_head, DictConfig):
+      construction_cost_head = OmegaConf.to_container(construction_cost_head, resolve=True)
+    head_type = construction_cost_head.get('type', '').strip() if isinstance(construction_cost_head, dict) else ''
+    is_regression = head_type.endswith('Regression')
+    is_classification = head_type.endswith('Classification')
     
-    # Monitor validation metric from online regression evaluator
-    metric_key = f'regression_online.val.{eval_metric}'
-    callbacks.append(ModelCheckpoint(
-      monitor=metric_key,
-      mode=mode,
-      filename=f'checkpoint_best_{eval_metric}_{{epoch:02d}}_{{{metric_key}:.4f}}',
-      dirpath=logdir,
-      save_top_k=1,  # Only keep the best checkpoint
-      auto_insert_metric_name=False,
-      verbose=True
-    ))
-    # Also save last epoch checkpoint
+    if is_regression:
+      # Get eval_metric from config (default to rmsle)
+      eval_metric = getattr(hparams, 'eval_metric', 'rmsle')
+      # Determine mode based on metric (lower is better for rmsle, mae, rmse)
+      if eval_metric in ['rmsle', 'mae', 'rmse']:
+        mode = 'min'  # Lower is better
+      else:
+        mode = 'min'  # Default to min (lower is better)
+      
+      # Monitor validation metric from online regression evaluator
+      metric_key = f'regression_online.val.{eval_metric}'
+      callbacks.append(ModelCheckpoint(
+        monitor=metric_key,
+        mode=mode,
+        filename=f'checkpoint_best_{eval_metric}_{{epoch:02d}}_{{{metric_key}:.4f}}',
+        dirpath=logdir,
+        save_top_k=1,  # Only keep the best checkpoint
+        auto_insert_metric_name=False,
+        verbose=True
+      ))
+    elif is_classification:
+      # Monitor validation classification cross-entropy loss (lower is better)
+      metric_key = 'classification_online.val.classification_ce'
+      callbacks.append(ModelCheckpoint(
+        monitor=metric_key,
+        mode='min',  # Lower loss is better
+        filename=f'checkpoint_best_classification_{{epoch:02d}}_{{{metric_key}:.6e}}',
+        dirpath=logdir,
+        save_top_k=1,  # Only keep the best checkpoint
+        auto_insert_metric_name=False,
+        verbose=True
+      ))
+    
+    # Also save last epoch checkpoint (for both regression and classification)
     callbacks.append(ModelCheckpoint(
       filename='checkpoint_last_epoch_{epoch:02d}',
       dirpath=logdir,

@@ -2092,6 +2092,232 @@ class MultiTaskCountryAwareRegression(nn.Module):
         return result
 
 
+class CountryAwareClassification(nn.Module):
+    """
+    Classification-only head for country prediction.
+    Mimics MultiTaskCountryAwareRegression but only has classification branch (no regression).
+    Used for monitoring representation quality during pretraining on traintest dataset
+    (where test samples have fake ground truth 0.0, so regression is not meaningful).
+    
+    Architecture:
+    - Input: (B, N, n_input) multimodal features
+    - Attention-based aggregation:
+      - Multi-head self-attention: Learn token importance -> (B, N, n_input)
+      - Residual connection + LayerNorm
+      - Mean pooling over sequence -> (B, n_input)
+    - Classification Branch: MLP -> (B, num_countries) class logits
+      - Class probabilities (softmax) serve as confidence scores
+    
+    Loss Calculation:
+    - Classification loss: Cross-entropy on class logits
+    
+    Args:
+        n_input: int - Input dimension (embedding size)
+        loss_type: Dict[str, float] - Loss configuration (only classification_ce is used)
+            Format: {"classification_ce": {"self_weight": 1.0, "global_weight": 1.0}}
+        n_hidden: Optional[int] - Hidden dimension (default: 2048)
+        p: float - Dropout probability (default: 0.2)
+        num_heads: int - Number of attention heads (default: 8)
+        num_countries: int - Number of country classes (default: 2)
+    """
+    def __init__(
+        self,
+        n_input: int,
+        loss_type: Dict[str, float],
+        n_hidden: Optional[int] = None,
+        p: float = 0.2,
+        num_heads: int = 8,
+        num_countries: int = 2,
+    ):
+        super().__init__()
+        
+        # IMPORTANT: Default to 2048 (matching old checkpoint architecture) for best results
+        n_hidden = n_hidden if n_hidden is not None else 2048
+        
+        # Store configuration
+        self.num_countries = num_countries
+        
+        # Ensure num_heads divides n_input (like AttentionAggregationRegression)
+        if n_input % num_heads != 0:
+            # Adjust num_heads to be compatible
+            num_heads = max(1, n_input // (n_input // num_heads))
+            print(f"⚠️  Adjusted num_heads to {num_heads} to be compatible with n_input={n_input}")
+        
+        # Multi-head self-attention for learning token importance (like MultiTaskCountryAwareRegression)
+        self.attention = nn.MultiheadAttention(
+            embed_dim=n_input,
+            num_heads=num_heads,
+            dropout=p,
+            batch_first=True  # (B, N, n_input) format
+        )
+        
+        # Layer norm after attention (like MultiTaskCountryAwareRegression)
+        self.attention_norm = nn.LayerNorm(n_input)
+        
+        # Parse loss_type: REQUIRES new format with self_weight and global_weight
+        # Format: {"classification_ce": {"self_weight": 1.0, "global_weight": 1.0}}
+        # Convert DictConfig to dict if needed
+        if isinstance(loss_type, DictConfig):
+            loss_type = dict(loss_type)
+        
+        if not isinstance(loss_type, dict):
+            raise ValueError(f"loss_type must be dict or DictConfig, got {type(loss_type)}")
+        
+        self.loss_config = {}
+        self.loss_self_weights = {}  # self_weight for normalization
+        self.loss_global_weights = {}  # global_weight for contribution to total
+        
+        for loss_name, loss_config in loss_type.items():
+            if not isinstance(loss_config, dict):
+                raise ValueError(
+                    f"Loss '{loss_name}' config must be a dict with 'self_weight' and 'global_weight'. "
+                    f"Got: {type(loss_config)}. Example: {{'self_weight': 1.0, 'global_weight': 1.0}}"
+                )
+            
+            if 'self_weight' not in loss_config or 'global_weight' not in loss_config:
+                raise ValueError(
+                    f"Loss '{loss_name}' config must have both 'self_weight' and 'global_weight'. "
+                    f"Got: {loss_config}. Example: {{'self_weight': 1.0, 'global_weight': 1.0}}"
+                )
+            
+            self.loss_self_weights[loss_name] = float(loss_config['self_weight'])
+            self.loss_global_weights[loss_name] = float(loss_config['global_weight'])
+            self.loss_config[loss_name] = loss_config  # Store full config for reference
+        
+        # Normalize global weights to sum to 1.0 (optional, but good practice)
+        total_global_weight = sum(self.loss_global_weights.values())
+        if total_global_weight > 0:
+            self.loss_global_weights = {k: v / total_global_weight for k, v in self.loss_global_weights.items()}
+        
+        self.loss_type = list(self.loss_config.keys())[0] if self.loss_config else 'classification_ce'
+        
+        # Classification branch: predicts class probabilities (like MultiTaskCountryAwareRegression)
+        # Uses attention-aggregated features instead of simple mean pooling
+        self.classification_head = nn.Sequential(
+            nn.Linear(n_input, n_hidden),
+            nn.BatchNorm1d(n_hidden),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p),
+            nn.Linear(n_hidden, num_countries)  # (B, num_countries) class logits
+        )
+        
+        # Loss function
+        self.cross_entropy = nn.CrossEntropyLoss()
+    
+    def forward(
+        self,
+        x: Tensor,  # (B, N, n_input)
+        country_gt: Optional[Tensor] = None,  # (B,) - Ground truth country labels (0 or 1)
+    ) -> Dict[str, Tensor]:
+        """
+        Forward pass with classification only.
+        
+        Args:
+            x: (B, N, n_input) - Multimodal features
+            country_gt: Optional (B,) - Ground truth country labels (0 or 1)
+        
+        Returns:
+            dict with keys:
+                - 'classification_logits': (B, num_countries) - Class logits
+                - 'classification_probs': (B, num_countries) - Class probabilities
+                - 'selected_country': (B,) - Selected country based on argmax
+                - 'loss': (scalar) - Loss value (if country_gt provided)
+                - 'loss_dict': dict - Dictionary of loss components (if country_gt provided)
+        """
+        # Attention-based feature aggregation (like MultiTaskCountryAwareRegression)
+        if x.dim() == 3:
+            # Step 1: Multi-head self-attention to learn token importance
+            # Self-attention: query, key, value all from x
+            attn_output, attn_weights = self.attention(x, x, x)  # (B, N, n_input)
+            
+            # Step 2: Residual connection + layer norm
+            x_attn = self.attention_norm(x + attn_output)  # (B, N, n_input)
+            
+            # Step 3: Mean pooling over sequence (after attention has learned importance)
+            x_agg = torch.mean(x_attn, dim=1)  # (B, n_input)
+        else:
+            x_agg = x  # Already (B, n_input)
+        
+        # Classification branch: predicts class probabilities
+        classification_logits = self.classification_head(x_agg)  # (B, num_countries)
+        classification_probs = F.softmax(classification_logits, dim=1)  # (B, num_countries)
+        
+        # Select country based on highest probability
+        selected_country = classification_probs.argmax(dim=1)  # (B,)
+        
+        # Prepare result dict
+        result = {
+            'classification_logits': classification_logits,
+            'classification_probs': classification_probs,
+            'selected_country': selected_country,
+        }
+        
+        # Calculate loss if country_gt is provided
+        if country_gt is not None:
+            loss_dict = self.calculate_loss(
+                classification_logits=classification_logits,
+                country_gt=country_gt,
+            )
+            result['loss'] = loss_dict['total']
+            result['loss_dict'] = loss_dict
+        
+        return result
+    
+    def calculate_loss(
+        self,
+        classification_logits: Tensor,
+        country_gt: Tensor,
+    ) -> Dict[str, Tensor]:
+        """
+        Calculate classification loss.
+        
+        Args:
+            classification_logits: (B, num_countries) - Classification logits
+            country_gt: (B,) - Ground truth country labels (0 or 1)
+        
+        Returns:
+            dict with keys:
+                - 'total': (scalar) - Total weighted loss (for backprop)
+                - 'classification_ce': (scalar) - Classification cross-entropy loss
+        """
+        loss_dict = {}
+        
+        # Classification loss (always computed)
+        classification_loss = self.cross_entropy(classification_logits, country_gt)
+        loss_dict['classification_ce'] = classification_loss
+        
+        # Calculate total weighted loss (only losses in loss_config contribute)
+        # Formula: normalized_loss = self_weight * raw_loss, then contribution = global_weight * normalized_loss
+        total_loss = 0.0
+        raw_losses = {}  # Store raw losses for evaluation/metrics
+        
+        for loss_name in self.loss_config.keys():
+            if loss_name in loss_dict:
+                raw_loss = loss_dict[loss_name]
+                self_weight = self.loss_self_weights.get(loss_name, 1.0)
+                global_weight = self.loss_global_weights.get(loss_name, 1.0)
+                normalized_loss = self_weight * raw_loss
+                contribution = global_weight * normalized_loss
+                
+                # Store raw loss for evaluation/metrics (original value without self_weight)
+                raw_losses[f'{loss_name}_raw'] = raw_loss
+                
+                # Update loss_dict to store normalized loss (after self_weight) for wandb logging
+                loss_dict[loss_name] = normalized_loss
+                
+                total_loss = total_loss + contribution
+            else:
+                raise ValueError(f"Loss '{loss_name}' in loss_config but not calculated. Available: {list(loss_dict.keys())}")
+        
+        # Add raw losses to loss_dict for evaluation/metrics
+        loss_dict.update(raw_losses)
+        
+        # Store total weighted loss
+        loss_dict['total'] = total_loss
+        
+        return loss_dict
+
+
 # Registry of available head classes
 HEAD_REGISTRY = {
     'RegressionMLP': RegressionMLP,
@@ -2102,6 +2328,7 @@ HEAD_REGISTRY = {
     'GatedAttentionPoolingRegression': GatedAttentionPoolingRegression,
     'DualPoolRegression': DualPoolRegression,
     'MultiTaskCountryAwareRegression': MultiTaskCountryAwareRegression,
+    'CountryAwareClassification': CountryAwareClassification,
     # Add more head classes here in the future
     # 'RegressionTransformer': RegressionTransformer,
     # 'RegressionResNet': RegressionResNet,
