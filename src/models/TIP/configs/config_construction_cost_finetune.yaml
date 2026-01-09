@@ -178,7 +178,7 @@ construction_cost_head:
   type: MultiTaskCountryAwareRegression
   p: 0.4  # Dropout increased from 0.3 to 0.4 for stronger regularization against overfitting
   n_hidden: 2048
-  num_queries: 1      # learnable queries (1–4 typical)
+  num_queries: 2      # learnable queries (1–4 typical)
   num_heads: 8        # attention heads for query pooling
   loss_type:
     rmsle:
@@ -218,16 +218,16 @@ max_epochs: 200
 log_every_n_steps: 1  # Log every step (since we have small number of batches ~13)
 
 # Scheduler (same as pretraining for consistency)
-# scheduler: anneal  # Options: anneal (LinearWarmupCosineAnnealingLR), plateau (ReduceLROnPlateau)
-# warmup_epochs: 20  # Warmup epochs (increased from 10 for better stability when training from scratch)
-# anneal_max_epochs: ${max_epochs}  # Max epochs for anneal scheduler (usually same as max_epochs)
+scheduler: anneal  # Options: anneal (LinearWarmupCosineAnnealingLR), plateau (ReduceLROnPlateau)
+warmup_epochs: 20  # Warmup epochs (increased from 10 for better stability when training from scratch)
+anneal_max_epochs: ${max_epochs}  # Max epochs for anneal scheduler (usually same as max_epochs)
 
 # Plateau scheduler
-scheduler: plateau
-plateau_factor: 0.5
-plateau_patience: 8        # Wait 8 epochs before reducing (balanced: not too aggressive, but responsive to plateaus)
-plateau_min_lr: 1e-6
-warmup_epochs: 15        # Warmup 15 epochs (reduced from 30 for faster convergence)
+# scheduler: plateau
+# plateau_factor: 0.5
+# plateau_patience: 8        # Wait 8 epochs before reducing (balanced: not too aggressive, but responsive to plateaus)
+# plateau_min_lr: 1e-6
+# warmup_epochs: 15        # Warmup 15 epochs (reduced from 30 for faster convergence)
 Monitor: eval.val.rmsle (already configured)
 
 # Training stability
@@ -244,7 +244,7 @@ limit_train_batches: null  # Use all training batches
 limit_val_batches: null  # Use all validation batches
 
 # Early Stopping Configuration
-use_early_stopping: true  # Enable/disable early stopping
+use_early_stopping: False  # Enable/disable early stopping
 early_stopping_patience: 20  # Number of epochs to wait before stopping (will be multiplied by 1/val_check_interval)
 early_stopping_min_delta: 0.0002  # Minimum change to qualify as an improvement
 limit_test_batches: null  # Use all test batches
